@@ -615,10 +615,18 @@ export async function runSupervisorSession(params: {
       }
       closed = true;
       cleanup();
+      let exitCode: number;
+      if (typeof code === 'number') {
+        exitCode = code;
+      } else if (timedOut || aborted) {
+        exitCode = 1;
+      } else {
+        exitCode = 0;
+      }
       resolve({
         stdoutText,
         stderrText,
-        exitCode: typeof code === 'number' ? code : timedOut || aborted ? 1 : 0,
+        exitCode,
         protocolError,
         timedOut,
         aborted,
