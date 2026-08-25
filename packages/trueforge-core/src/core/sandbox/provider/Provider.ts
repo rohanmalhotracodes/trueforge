@@ -14,7 +14,7 @@ export interface ExecErrorResult {
 
 export type ExecResult = ExecSuccessResult | ExecErrorResult;
 
-export const SANDBOX_EXEC_ABORTED_ERROR = 'Sandbox exec aborted';
+export const SANDBOX_EXEC_ABORTED = 'Sandbox exec aborted';
 
 /**
  * Wraps a value in single quotes for safe use in a shell command. Inner single quotes are

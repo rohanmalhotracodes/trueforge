@@ -18,7 +18,7 @@ import {
 import { absolutizeRelativeExecEnv } from './execEnv';
 import {
   ensureExecSuccess,
-  SANDBOX_EXEC_ABORTED_ERROR,
+  SANDBOX_EXEC_ABORTED,
   shellEscape,
   type ExecResult,
   type SandboxBuild,
@@ -183,7 +183,7 @@ export class TFYSandboxProvider implements SandboxProvider {
       } catch (e: unknown) {
         if (e instanceof Error && e.name === 'AbortError') {
           if (abortState.source === 'turn' && isSignalAborted(params.signal)) {
-            return { success: false, error: SANDBOX_EXEC_ABORTED_ERROR };
+            return { success: false, error: SANDBOX_EXEC_ABORTED };
           }
           this.logger.error(`Sandbox exec timed out after ${String(timeoutSeconds)}s`, extractErrorLogFields(e));
           return { success: false, error: `Sandbox exec timed out after ${String(timeoutSeconds)}s` };

@@ -10,7 +10,7 @@ import type {
 } from '@truefoundry/trueforge-core/core';
 import {
   absolutizeRelativeExecEnv,
-  SANDBOX_EXEC_ABORTED_ERROR,
+  SANDBOX_EXEC_ABORTED,
   SandboxFileNotFoundError,
   SandboxFileTooLargeError,
   SandboxNotAvailableError,
@@ -606,7 +606,7 @@ export class LocalSandboxProvider implements SandboxProvider {
   async exec(params: SandboxExecParams): Promise<ExecResult> {
     this.ensureSandboxRoot(params.sandboxId);
     if (params.signal?.aborted === true) {
-      return { success: false, error: SANDBOX_EXEC_ABORTED_ERROR };
+      return { success: false, error: SANDBOX_EXEC_ABORTED };
     }
     try {
       await this.ensureSrt();
@@ -630,7 +630,7 @@ export class LocalSandboxProvider implements SandboxProvider {
         signal: params.signal,
       });
       if (session.aborted) {
-        return { success: false, error: SANDBOX_EXEC_ABORTED_ERROR };
+        return { success: false, error: SANDBOX_EXEC_ABORTED };
       }
       if (session.protocolError !== undefined) {
         return { success: false, error: session.protocolError };

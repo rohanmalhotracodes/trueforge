@@ -1,5 +1,5 @@
 import { absolutizeRelativeExecEnv } from '../../../../src/core/sandbox/provider/execEnv';
-import { SANDBOX_EXEC_ABORTED_ERROR } from '../../../../src/core/sandbox/provider/Provider';
+import { SANDBOX_EXEC_ABORTED } from '../../../../src/core/sandbox/provider/Provider';
 import { TFYSandboxProvider, withMcpClientOnPath } from '../../../../src/core/sandbox/provider/TFYSandboxProvider';
 import { makeSilentLogger } from '../../harnessMocks';
 
@@ -104,6 +104,6 @@ describe('TFYSandboxProvider layout', () => {
     await execFetchStarted;
     controller.abort();
 
-    await expect(exec).resolves.toEqual({ success: false, error: SANDBOX_EXEC_ABORTED_ERROR });
+    await expect(exec).resolves.toEqual({ success: false, error: SANDBOX_EXEC_ABORTED });
   });
 });

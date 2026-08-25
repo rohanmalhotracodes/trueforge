@@ -7,6 +7,7 @@
  * {@link initSrt} — the same platform captured by LocalSandboxProvider.isSupported.
  */
 import { getDefaultWritePaths, SandboxManager } from '@anthropic-ai/sandbox-runtime';
+import { onSignalAbort } from '@truefoundry/trueforge-core/core';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
@@ -585,18 +586,13 @@ export async function runSupervisorSession(params: {
       timedOut = true;
       killExecTree(child);
     }, timeoutMs);
-    const abortExec = (): void => {
+    const cleanupAbort = onSignalAbort(signal, () => {
       aborted = true;
       killExecTree(child);
-    };
-    if (signal?.aborted === true) {
-      abortExec();
-    } else {
-      signal?.addEventListener('abort', abortExec, { once: true });
-    }
+    });
     const cleanup = (): void => {
       clearTimeout(timer);
-      signal?.removeEventListener('abort', abortExec);
+      cleanupAbort();
       SandboxManager.cleanupAfterCommand();
     };
 
@@ -615,13 +611,11 @@ export async function runSupervisorSession(params: {
       }
       closed = true;
       cleanup();
-      let exitCode: number;
-      if (typeof code === 'number') {
+      let exitCode = 0;
+      if (code !== null) {
         exitCode = code;
       } else if (timedOut || aborted) {
         exitCode = 1;
-      } else {
-        exitCode = 0;
       }
       resolve({
         stdoutText,

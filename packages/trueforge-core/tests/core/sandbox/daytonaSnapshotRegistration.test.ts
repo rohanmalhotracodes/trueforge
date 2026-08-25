@@ -1,6 +1,6 @@
 import { Daytona, DaytonaError, type Sandbox } from '@daytona/sdk';
 import { DaytonaSandboxProvider } from '../../../src/core/sandbox/provider/DaytonaProvider';
-import { SANDBOX_EXEC_ABORTED_ERROR } from '../../../src/core/sandbox/provider/Provider';
+import { SANDBOX_EXEC_ABORTED } from '../../../src/core/sandbox/provider/Provider';
 import { SandboxNotAvailableError } from '../../../src/core/sandbox/SandboxErrors';
 import { makeSilentLogger } from '../harnessMocks';
 
@@ -137,7 +137,7 @@ describe('DaytonaSandboxProvider exec', () => {
     }
     reject(new DaytonaError('sandbox stopped', 500));
 
-    await expect(exec).resolves.toEqual({ success: false, error: SANDBOX_EXEC_ABORTED_ERROR });
+    await expect(exec).resolves.toEqual({ success: false, error: SANDBOX_EXEC_ABORTED });
     const sandbox = await client.get('test-tenant.abort');
     expect(sandbox.stop).toHaveBeenCalledWith(1, true);
     expect(sandbox.start).not.toHaveBeenCalled();

@@ -18,7 +18,7 @@ import type { CodeModeTransport } from '../codeMode/CodeModeTransport';
 import { CodeModeNatsTransport } from '../codeMode/nats/CodeModeNatsTransport';
 import { DEFAULT_PREVIEW_URL_EXPIRY_SECONDS, DEFAULT_SANDBOX_NATS_WS_PORT } from '../constants';
 import {
-  SANDBOX_EXEC_ABORTED_ERROR,
+  SANDBOX_EXEC_ABORTED,
   type ExecResult,
   type SandboxBuild,
   type SandboxExecParams,
@@ -397,9 +397,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   async exec(params: SandboxExecParams): Promise<ExecResult> {
     return context.with(suppressTracing(context.active()), async (): Promise<ExecResult> => {
       if (isSignalAborted(params.signal)) {
-        return { success: false, error: SANDBOX_EXEC_ABORTED_ERROR };
+        return { success: false, error: SANDBOX_EXEC_ABORTED };
       }
-      const execAbortState = { requested: false };
+      // Map the catch to abort only if this exec's handler called stop(); a later signal abort must not hide a Daytona error.
+      const execAbortRequested = { value: false };
       try {
         return await this.executeWithSandboxRecovery({
           sandboxId: params.sandboxId,
@@ -408,10 +409,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
             const { sandbox, defaultTimeoutMs } = await this.getOrCreateSandbox(params.sandboxId);
             const timeoutSeconds = params.timeoutSeconds ?? defaultTimeoutMs / 1000;
             if (isSignalAborted(params.signal)) {
-              return { success: false, error: SANDBOX_EXEC_ABORTED_ERROR };
+              return { success: false, error: SANDBOX_EXEC_ABORTED };
             }
             const cleanupAbort = onSignalAbort(params.signal, () => {
-              execAbortState.requested = true;
+              execAbortRequested.value = true;
               void sandbox.stop(timeoutSeconds, true).catch((error: unknown) => {
                 this.logger.error('Failed to stop Daytona sandbox after exec abort', {
                   ...extractErrorLogFields(error),
@@ -426,10 +427,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
                 params.env ?? {},
                 timeoutSeconds,
               );
-              if (execAbortState.requested) {
+              if (execAbortRequested.value) {
                 // Drop only the stale SDK object. The remote sandbox and filesystem stay under the same id.
                 DaytonaSandboxProvider.cachedSandboxes.delete(params.sandboxId);
-                return { success: false, error: SANDBOX_EXEC_ABORTED_ERROR };
+                return { success: false, error: SANDBOX_EXEC_ABORTED };
               }
               return {
                 success: true,
@@ -442,8 +443,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         });
       } catch (e: unknown) {
         DaytonaSandboxProvider.cachedSandboxes.delete(params.sandboxId);
-        if (execAbortState.requested) {
-          return { success: false, error: SANDBOX_EXEC_ABORTED_ERROR };
+        if (execAbortRequested.value) {
+          return { success: false, error: SANDBOX_EXEC_ABORTED };
         }
         if (e instanceof SandboxNotAvailableError) {
           throw e;

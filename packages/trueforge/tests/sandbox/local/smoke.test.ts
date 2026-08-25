@@ -3,7 +3,7 @@
  * plus Code Mode UDS and security probes. Run via `pnpm smoke`.
  */
 import { getDefaultWritePaths, SandboxManager } from '@anthropic-ai/sandbox-runtime';
-import { CodeModeDispatcher, SANDBOX_EXEC_ABORTED_ERROR, type IToolSet } from '@truefoundry/trueforge-core/core';
+import { CodeModeDispatcher, SANDBOX_EXEC_ABORTED, type IToolSet } from '@truefoundry/trueforge-core/core';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -1967,7 +1967,7 @@ async function main(): Promise<void> {
     const abortElapsedMs = Date.now() - abortExecStartedAt;
     assert.equal(abortResult.success, false);
     if (abortResult.success) throw new Error('unreachable');
-    assert.equal(abortResult.error, SANDBOX_EXEC_ABORTED_ERROR);
+    assert.equal(abortResult.error, SANDBOX_EXEC_ABORTED);
     assert.ok(abortElapsedMs < 10_000, `abort took ${String(abortElapsedMs)}ms`);
     const afterAbort = await provider.exec({
       sandboxId,
