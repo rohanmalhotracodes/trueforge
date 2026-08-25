@@ -154,12 +154,13 @@ export class TFYSandboxProvider implements SandboxProvider {
 
       const controller = new AbortController();
       const clientTimeoutMs = (timeoutSeconds + CLIENT_TIMEOUT_BUFFER_SECONDS) * 1000;
-      let timedOut = false;
+      const abortState: { source: 'timeout' | 'turn' | undefined } = { source: undefined };
       const timer = setTimeout(() => {
-        timedOut = true;
+        abortState.source = 'timeout';
         controller.abort();
       }, clientTimeoutMs);
       const cleanupAbort = onSignalAbort(params.signal, () => {
+        abortState.source = 'turn';
         controller.abort();
       });
 
@@ -181,7 +182,7 @@ export class TFYSandboxProvider implements SandboxProvider {
         return result;
       } catch (e: unknown) {
         if (e instanceof Error && e.name === 'AbortError') {
-          if (!timedOut && isSignalAborted(params.signal)) {
+          if (abortState.source === 'turn' && isSignalAborted(params.signal)) {
             return { success: false, error: SANDBOX_EXEC_ABORTED_ERROR };
           }
           this.logger.error(`Sandbox exec timed out after ${String(timeoutSeconds)}s`, extractErrorLogFields(e));
