@@ -1,4 +1,5 @@
-- `withTransaction` callbacks MUST only do local DB work: no `await` of `fetch`, an SDK client, Redis, or other remote I/O (including through helpers). Finish remote work before opening the txn.
+- `withTransaction` callbacks MUST only do local DB work by default: no `await` of `fetch`, an SDK client, Redis, or other remote I/O (including through helpers). Finish remote work before opening the txn. Any exception MUST be documented at the call site and use an explicit timeout shorter than the database transaction timeout.
+- `PUT /api/v1/settings/sandbox-providers` is a temporary exception: its Daytona `buildImage()` call runs inside the transaction while that design is revisited and MUST remain bounded by `BUILD_REQUEST_TIMEOUT_MS`.
 - `withTransaction` is `db.transaction().execute(callback)`: commits on resolve, rolls back on throw. Return domain data from the callback; build success `c.json(...)` after it. Failures that must undo writes MUST `throw` (e.g. `HTTPException`); MUST NOT `return c.json({ error: ... }, status)` inside — a returned Response commits while the client still sees an error.
 
 ### OpenAPI naming convention
