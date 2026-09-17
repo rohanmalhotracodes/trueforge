@@ -10,6 +10,8 @@ import type {
   CreateTurnInput,
   DeleteSessionInput,
   FreezeAndGetTurnInput,
+  GetOwnedIdsInput,
+  GetSessionByExternalIdInput,
   GetSessionInput,
   GetTurnInput,
   ISessionStore,
@@ -41,6 +43,8 @@ import {
 import {
   createSession as createSessionQuery,
   deleteSession as deleteSessionQuery,
+  getOwnedIds as getOwnedIdsQuery,
+  getSessionByExternalId as getSessionByExternalIdQuery,
   getSession as getSessionQuery,
   listSessions as listSessionsQuery,
   updateSession as updateSessionQuery,
@@ -98,6 +102,14 @@ export class SqliteSessionStore implements ISessionStore<SessionCustom, TurnCust
 
   getSession(input: GetSessionInput): Promise<SessionRecord<SessionCustom> | undefined> {
     return getSessionQuery(this.db, input);
+  }
+
+  getOwnedIds(input: GetOwnedIdsInput): Promise<readonly string[]> {
+    return getOwnedIdsQuery(this.db, input);
+  }
+
+  getSessionByExternalId(input: GetSessionByExternalIdInput): Promise<SessionRecord<SessionCustom> | undefined> {
+    return getSessionByExternalIdQuery(this.db, input);
   }
 
   updateSession(input: UpdateSessionInput<SessionCustom>): Promise<void> {

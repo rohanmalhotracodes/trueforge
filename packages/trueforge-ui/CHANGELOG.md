@@ -1,5 +1,233 @@
 # Changelog
 
+## 0.3.0-rc.10
+
+### Patch Changes
+
+- 584e815: Gate Save Agent (create) on tenant CREATE from list-permissions, keep Update Agent on agent MANAGE, unwrap `{ type, permissions }`, and bump `@truefoundry/assistant-ui-runtime` to `0.1.39`.
+
+## 0.3.0-rc.9
+
+### Patch Changes
+
+- fd1bf7f: Bump `@truefoundry/assistant-ui-runtime` to `0.1.38` for assistant completion timestamps and keep-alive turn streams on session switch.
+- 079f832: Show an optional tooltip when sandbox artifact downloads are read-only.
+- Updated dependencies [648273b]
+- Updated dependencies [134dcb9]
+  - @truefoundry/trueforge-sdk@0.2.0-rc.8
+
+## 0.3.0-rc.8
+
+### Patch Changes
+
+- Updated dependencies [648273b]
+  - @truefoundry/trueforge-sdk@0.2.0-rc.7
+
+## 0.3.0-rc.7
+
+### Patch Changes
+
+- 531f0ce: Keep close-on-click dropdown menus and bottom sheets open when a click or drag lands on their own scrollbar, so scrolling a long menu no longer dismisses it before a choice is made.
+- 531f0ce: Cap the skill version menu height and scroll it, so skills with many versions no longer run off screen. While it is open, scrolling is confined to the menu.
+- Updated dependencies [648273b]
+  - @truefoundry/trueforge-sdk@0.2.0-rc.6
+
+## 0.3.0-rc.6
+
+### Patch Changes
+
+- 8c31eae: Round-trip agent description through save/load and show it in the library and agent details.
+- d7136a1: Avatar fallbacks use a light primary-button gradient in light mode, a solid primary gradient in dark mode, and show a single initial character.
+- d7136a1: Assistant message loading indicator uses ThinkingOrb with left-to-right shimmering Working... text.
+- b316430: Slide SideDrawer/BottomSheet and add a light fade+scale enter on dropdowns and popup cards.
+- dc2151f: Paginate `GET /api/v1/agents` with `limit` / `page_token` and a `pagination` envelope; optional `agent_name` filters by case-insensitive substring. Agents library uses rows-per-page and prev/next against the token-paginated API. Schedule create and the schedules listing agent filter use a searchable agent combobox backed by the same filtered list API.
+- d7136a1: Flip PopoverSelect menus when the preferred side lacks viewport room (e.g. table rows-per-page).
+- 04460fb: Prevent the schedule search field from shrinking and clipping its placeholder.
+- fa0730b: Reduce the agent code snippet font size to match its surrounding controls.
+- d7136a1: Stop draining the full agents catalog on Schedules mount; load agents only when the filter opens (infinite scroll).
+- d7136a1: Settings sidebar uses a subtle primary tint for the selected section instead of a solid fill.
+- Updated dependencies [648273b]
+- Updated dependencies [9501536]
+- Updated dependencies [dc2151f]
+  - @truefoundry/trueforge-sdk@0.2.0-rc.5
+
+## 0.3.0-rc.5
+
+### Patch Changes
+
+- 4e72afc: Announce boot loading with a light-themed orb for contrast outside ThemeProvider.
+- ea86853: Move the agent metrics time range filter into the active Metrics tab row.
+- 98ab384: Preserve the active agent draft when returning to Build Agent from another page.
+- 4e72afc: Use an animated thinking orb for application boot and server initialization.
+
+## 0.3.0-rc.4
+
+### Patch Changes
+
+- 629b6e9: Paginate the Agent Sessions list on scroll instead of a "Load more" button, showing a skeleton row while the next page loads.
+- 629b6e9: Fix Agents library table scrolling when rows exceed the viewport
+- 629b6e9: Show Created by (avatar + name) on Agents and Schedules tables when creator info is present.
+- 629b6e9: Portal PopoverSelect menus so table page-size and other selects are not clipped by overflow parents.
+- ef278dd: Stop highlighting New Chat while trying a named agent, and clear the Try Agent URL and history filter when starting a new chat.
+- ceeb56f: Show turn and duration statistics alongside the featured agent metric cards.
+- Updated dependencies [648273b]
+  - @truefoundry/trueforge-sdk@0.2.0-rc.4
+
+## 0.3.0-rc.3
+
+### Minor Changes
+
+- 1d31116: Open agent model settings inline and support typed custom model parameters.
+- 74eae6c: Remove pagination from list MCP servers across the API, SDK, and UI; return and search the complete configured MCP catalog client-side.
+- 12b02ff: Open Runtime Config in a right-side drawer and label scheduled sessions consistently.
+- 7e25f68: Open Save Agent in a right-side drawer with only the agent name while preserving configuration from Agent Config.
+- f8b5eeb: Add optional resource permissions and gate agent, schedule, and session mutations.
+
+### Patch Changes
+
+- 762ecc0: TrueFoundry skills catalog: proxy GET /skills and /skills/versions from ServiceFoundry; settings skill writes return 424. SkillManifest is a type-discriminated oneOf of GitSkill | TrueFoundryRegistrySkill (`type: truefoundry`; name is FQN, display_name is short). AvailableSkill exposes optional metadata (display_name, repository_name, version). AgentSpec skill refs allow opaque FQN names, optional preload (registry), and max 50. UI draft skill mounts map catalog `id` to AgentSpec `name`.
+- 26a9b80: Add an agent-scoped Schedules tab and route library schedule actions into it.
+- 1b8a3f7: Add documentation links to the code snippets view and shell actions.
+- d2fdfc9: Add agent-filtered chat history labels, preserve Try Agent and explicit history-filter intent in URL query state while resolving backend IDs, reset active chats when users change filters, keep Try Agent highlighted as chat, and route fresh agent builders at `/build-agent` before their session URL is assigned.
+- 26a9b80: Allow sending user messages that contain attachments without text.
+- 26a9b80: Add an empty state and Build Agent action to the schedule agent picker.
+- 4c522e2: Bump `@truefoundry/assistant-ui-runtime` to `0.1.30`.
+- 4c522e2: Bump `@truefoundry/assistant-ui-runtime` to `0.1.31`.
+- d719155: Keep composer catalogs cached when starting a new chat.
+- c0359ca: Strip a trailing slash from the `base_url` passed to agent code-snippets.
+- 57f1fc2: Improve compact agent building with model configuration bottom sheets, provider-first model selection, and a contextual composer actions menu.
+- e3973a5: Show the selected connector and skill count beside the composer tools icon.
+- 26a9b80: Hide model selection in the Build Agent composer and correct concurrent sub-agent timeline bars.
+- 26a9b80: Require direct switch clicks in the Runtime Config sidebar.
+- 1ec19f0: Replace API key replacement with connector configuration editing from the connector list and details view.
+- b482cdd: Show the four primary agent metrics in a compact summary-card layout.
+- b32d2be: Filter chat history to sessions created by the current user, and bump `@truefoundry/assistant-ui-runtime` to `0.1.34`.
+- a9430bd: Accept optional `base_url` on agent code-snippets (FE public host); fall back to request origin + `PUBLIC_BASE_URL` path.
+- 54e4ec4: Keep Settings hidden until the server explicitly enables it.
+- 4c522e2: Hide session cost metrics when cost data is unavailable.
+- 4e7b67a: Check live per-user MCP authentication before loading tools in the agent builder.
+- d2fdfc9: Section MCP tools in the Build Agent selector by read-only, others, and destructive annotations, with a read-only enable-all toggle.
+- 26a9b80: Show agent names without an icon in the Agents table.
+- 4cea38c: Show draft and named sessions in the history panel, exclude agent-builder sessions, cache session pages, and switch history sessions in place without remounting the chat runtime.
+- 2284d3b: Polish the MCP tool selector controls, loading state, and API error messages.
+- e3973a5: Group schedule recurrence controls and display the cadence in an attached summary footer.
+- f2ca338: Show active/paused schedule counts in the Agents library, pin selected MCPs when reopening the tools modal, and align paused schedule badge colors.
+- 77c5c33: Show TrueFoundry skill repositories and versions in skill pickers, load version choices lazily, preserve the chosen version FQN when attaching skills, keep picker ordering stable while open, and add registry-only preload controls to selected skill pills.
+- 26a9b80: Show weekly schedule days before the time controls.
+- 1b8a3f7: Match the Build Agent configuration panel width to the agent playground and identify sessions created by schedule runs.
+- adaf532: Widen the sidebar rail and its nav buttons so labels like "Build Agent" have more breathing room.
+- Updated dependencies [648273b]
+- Updated dependencies [648273b]
+- Updated dependencies [648273b]
+- Updated dependencies [74eae6c]
+- Updated dependencies [44f9cbe]
+  - @truefoundry/trueforge-sdk@0.2.0-rc.3
+
+## 0.3.0-rc.2
+
+### Minor Changes
+
+- 04d2ee6: Add a `sidebarText` semantic token for sidebar nav labels, refresh trueforge sidebar colors, set trueforge base `radius` to `0.375rem` (6px), and set sidebar / thread-list control corners to `0.75rem` (12px).
+
+  Expose design-system `Button` (`Button.Primary` / `.Secondary` / `.Ghost` / `.Destructive`). `ButtonVariant` is now `primary | secondary | ghost | destructive` (`default` renamed to `primary`; `outline` removed — use `secondary`). Button sizes are `large` (default) and `small` (`icon` for icon-only).
+
+### Patch Changes
+
+- 2a0ae4c: Show connector catalog logos in the composer Tools picker, matching the Connectors settings page.
+- 2a0ae4c: Align AttachmentCard with assistant-ui's default square thumbnail, filename tooltip, and overlay remove control.
+- fe6a14b: Improve session timelines with sub-agent wait states, grouped point-event markers, clean linear ticks, and readable summary durations.
+- d5b479d: Clamp optional sessions/schedules chrome and unregister `/sessions`, `/schedules`, and `/library/:agentId` when those server ports are omitted, matching the Settings Lego gate.
+- 5d72138: Keep `npx @truefoundry/trueforge` working on native Windows: import Kysely migrations with `pathToFileURL`, and keep sandbox guest paths POSIX. Source development stays Unix/WSL; CI also runs unit and SQLite store tests on Windows.
+- Updated dependencies [a000b47]
+- Updated dependencies [0ec8dc6]
+- Updated dependencies [11865b4]
+  - @truefoundry/trueforge-sdk@0.1.4-rc.2
+
+## 0.3.0-rc.1
+
+### Minor Changes
+
+- d269b01: Add a live advanced agent configuration drawer with shared model, runtime, MCP tool, skill, and Save Agent editors.
+- e74e953: Keep agent configuration visible on the left in full-width builder layouts, add a responsive instructions and initial-messages drawer with explicit save, make mobile config overlays closable, save the current instruction draft, align builder chrome, and preserve open widgets across chat runtime changes.
+- a189482: Add routed agent detail pages with lazy Overview, Sessions, and Use In Code tabs backed by the optional AgentSessionsServer port and built-in TrueForge adapter.
+- 8491843: Add a slot-driven agent Metrics tab with aggregate cards, time-range filtering, and Harness-backed line charts.
+- a189482: Add the agent library Sessions tab and an all-user Sessions sidebar page (including drafts) with agent and time filters, shareable query params, and the same two-pane timeline. Library agent details keep the active tab in `?tab=` so opening an agent lands on Overview.
+- bc11131: MCP selectors (composer + agent config) infinite-scroll through `listMcp` pages via DraftCatalogProvider.
+- 860e322: Split New Chat vs New Agent: simple chat keeps the Connectors/Skills picker; New Agent keeps Agent Config + Save Agent. Session metadata `is_create_agent` drives resume from the sessions browser.
+- 0cc59f8: Wire schedule test runs and show last five run status chips on the schedules table. Bump `@truefoundry/assistant-ui-runtime` to `0.1.25`.
+- 0cc59f8: Add global Schedules page at `/schedules` with listing, popover-based filters, and create/edit drawer wired to the schedule API. New schedules save as paused, open a Test Schedule review with MCP connect status, and support Activate Anyway. List schedules uses server token pagination and multi-agent filters. Agents shows a Schedules count column (warning when any are paused) loaded via a batched list for on-screen agents. Add Table primitives with client-side and token pagination plus portal DropdownMenu so row actions are not clipped by overflow. Export a reusable popover select with single- and multi-select modes.
+- 788636d: Sidebar layout is a permanent icon+label nav rail (no expand/collapse). Recent chats are hidden from the sidebar and mobile drawer; the drawer shows nav actions only.
+- 8f1a2dc: Add a TrueFoundry-managed model registry. When `TRUEFOUNDRY_SERVICEFOUNDRY_SERVER_URL` is set, models are listed from the TrueFoundry ServiceFoundry server and turns are routed through the tenant's default AI Gateway with the caller's token. Mutually exclusive with OIDC. Supports internal mutual TLS to the ServiceFoundry server via `TRUEFOUNDRY_MTLS_ENABLED`/`TRUEFOUNDRY_MTLS_CERTS_DIR`.
+
+### Patch Changes
+
+- 347a7e7: Refresh composer and composer-trigger styling: 0.75rem composer corners with a light-theme primary-token gradient hairline (faded top → solid bottom) and a neutral hairline in dark, an icon-only tools trigger in place of the "Tools" caption and count badge, the shared `agent-2` glyph on the agents-library trigger, and squared-off chrome-action geometry on the save-agent trigger. Also fixes `agent-2.svg` to use `currentColor` so it is legible in dark mode.
+- a189482: Load agent Use In Code snippets through `client.internal.agents.getCodeSnippets` instead of a raw `client.fetch`.
+- c4ee138: Agent list and details overflow menu: Edit, Clone (`{name}-copy` via saveAgent), Manage Schedules, and Delete (wired through harness `deleteAgent`).
+- c4ee138: AgentSessions list pane uses a quieter surface, and the resize grip stays gray until hover, press, or focus.
+- c4ee138: Agent Code (`SyntaxHighlighter` / `AgentCodeBlock`) copy control uses the bordered secondary button, and a trailing source newline no longer paints an empty last line while Copy still keeps the exact source.
+- c4ee138: Agents, Sessions, and Schedules empty states use a shared centered empty-box screen with title and supporting copy.
+- 0cc59f8: Use Google Sans as the default `trueforge` theme font and load it from Google Fonts when styles are injected.
+- 64ca089: Hide Clear chat while the thread is fresh (New Chat, New Agent, and Try Agent) since there is nothing to clear.
+- 64ca089: Add a book-icon preload toggle and dashed add button to Agent Config MCP server pills.
+- d269b01: Improve MCP and skill selectors with consistent search sizing, explicit MCP selection controls, grouped tool summaries, and removable MCP chips.
+- 64ca089: Revamp the MCP tools selector modal with focus rows, connect empty state, and grouped selected-tools summary.
+- bc11131: New Chat enables sandbox on the live draft agent config when capabilities report sandbox as available.
+- c4ee138: Resume Chat / Resume Agent building opens in a new tab when routed (`/sessions/:id` + square-arrow-out-up-right); without a router it keeps the in-shell resume fallback.
+- 788636d: Open the create schedule drawer when Agents "+ Schedule" navigates with `isNew=true`, then clear the flag from the URL.
+- 333230d: Improve Agent Sessions with a resizable divider, accurate turn grouping, optional cost display, and reliable timeline tooltips with sub-agent details. Simplify schedule recurrence and default new schedules to the local timezone.
+- c4ee138: Unregister the `/settings` route when Settings chrome is unavailable (no catalog or `capabilities.settings.enabled` is false), matching the sidebar Settings button gate.
+- c4ee138: Split New Chat and New Agent draft preference stores. New Chat remembers only model (+ reasoning), skills, and MCP; New Agent keeps the full seed including runtime config.
+- 4c1260e: Wire TrueFoundry MCP authorize, status, and delete through ServiceFoundry; stub list auth_status; gate oauth2 invoke mid-turn with authRequired; paginate MCP server lists. UI treats SFY consent `code`/`error` on the FE landing like local DCR success/failure.
+- c4ee138: Per-turn Tokens in Agent Sessions shows a keyboard-accessible Input / Output / Cached tooltip (Input is uncached).
+- bc11131: Share a single `PageHeader` across chat and list chrome so title size/height stay consistent, and drop decorative title icons.
+- Updated dependencies [648273b]
+- Updated dependencies [648273b]
+- Updated dependencies [2dcb3a0]
+- Updated dependencies [52987a7]
+- Updated dependencies [38ce068]
+- Updated dependencies [b654052]
+- Updated dependencies [4c1260e]
+- Updated dependencies [f175245]
+  - @truefoundry/trueforge-sdk@0.1.4-rc.1
+
+## 0.3.0-rc.0
+
+### Minor Changes
+
+- 3539da2: Add `brand.mode` (`icon-title` | `icon-only` | `logo`) so hosts pick chrome look first; `name` always labels the mark, and `resolveBrandChrome` maps mode to layout chrome.
+- 16feb29: Add `customActionRenderers` so hosts can pause the composer on client-side tools with their own UI and resume via `onSubmit(content)`.
+- 0297727: Add context-management compaction triggers with model-aware defaults and migrate persisted legacy token thresholds.
+
+### Patch Changes
+
+- b11cfc3: Wire remote chat session deletion and improve the history delete action styling.
+- 3ca4e2e: fixed the button component icon and padding, delete conflicting local prettier.json in trueforge-ui package
+- a655537: Update published dependency ranges (AI SDK, Hono, MCP SDK, Redis, assistant-ui, and related packages).
+- aa4be44: Open markdown links in assistant messages in a new tab
+- d7015fd: show mcp server tool name on tool approval
+- Updated dependencies [648273b]
+  - @truefoundry/trueforge-sdk@0.1.4-rc.0
+
+## Unreleased
+
+### Minor Changes
+
+- **`brand.mode`** — explicit chrome look. Set `mode`, then pass the fields it requires.
+  `name` always labels the mark (`alt` / `aria-label`):
+  - **`'icon-title'`** — `name` + optional `icon` (title shown in expanded chrome)
+  - **`'icon-only'`** — `name` + `icon` (alt kept, no title text)
+  - **`'logo'`** — `name` + `icon` + `logo` (wordmark in expanded chrome; `name` is alt only)
+  - **Default** — omit `brand` for the TrueForge wordmark / square mark
+- **`resolveBrandChrome()`** — maps `brand.mode` to
+  `{ expandedVariant, collapsedVariant, showTitle }`. `SidebarLayout` uses it; custom
+  layouts should too.
+
+### Changed
+
+- **`BrandConfig`** — discriminated on `mode` (`BrandMode`). Removed `showTitle` from
+  config; visible title follows the mode.
+
 ## 0.2.4
 
 ### Patch Changes

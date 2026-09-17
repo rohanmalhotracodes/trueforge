@@ -20,6 +20,24 @@ describe('TurnResourceResolver.resolveAgentSpec', () => {
 });
 
 describe('TurnResourceResolver.resolveAgentDefinition', () => {
+  it('allows existing model resolvers to omit an unknown context length', async () => {
+    const resolver = new TurnResourceResolver({
+      llm: () => Promise.resolve({ modelClient: makeMockILLM(), defaultModelParams: {} }),
+      mcp: () => Promise.reject(new Error('unused')),
+      mcpRequestTimeoutMs: 1_000,
+      mcpConnectTimeoutMs: 1_000,
+      logger: makeSilentLogger(),
+    });
+
+    const { definition } = await resolver.resolveAgentDefinition({
+      spec: makeAgentSpec(),
+      signal: new AbortController().signal,
+      tracing: resolver.createTracing(),
+    });
+
+    expect(definition.modelProperties).toBeUndefined();
+  });
+
   it.each([
     {
       name: 'uses the resolved model default when the agent omits max_tokens',
@@ -39,6 +57,7 @@ describe('TurnResourceResolver.resolveAgentDefinition', () => {
         Promise.resolve({
           modelClient: makeMockILLM(),
           defaultModelParams: resolvedModelParams,
+          modelProperties: { contextLength: 128_000 },
         }),
       mcp: () => Promise.reject(new Error('unused')),
       mcpRequestTimeoutMs: 1_000,
@@ -59,6 +78,7 @@ describe('TurnResourceResolver.resolveAgentDefinition', () => {
     });
 
     expect(definition.modelParams?.['max_tokens']).toBe(expected);
+    expect(definition.modelProperties?.contextLength).toBe(128_000);
   });
 });
 
@@ -69,8 +89,9 @@ describe('SessionHandle.createTurn named resolve', () => {
     const session = await sessions.create({
       tenant_id: 'tenant-1',
       session_id: 's-named',
-      created_by: 'user-1',
+      created_by_subject: { subject_id: 'user-1', subject_type: 'user', subject_display_name: 'user-1' },
       agent: { type: 'reference', id: 'agent-abc', name: null },
+      external_id: null,
     });
 
     const live = makeAgentSpec({ instructions: 'from-registry' });

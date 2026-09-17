@@ -207,7 +207,7 @@ export default function App() {
   }}
   theme={{
     preset: 'claude',
-    brand: { name: 'Acme', logo: '/logo.svg' },
+    brand: { mode: 'icon-title', name: 'Acme', icon: '/icon.svg' },
   }}
   overrides={{/* slot overrides */}}
   className="h-full"
@@ -319,7 +319,15 @@ package). Host CSS on `.aui-markdown` / `.aui-syntax-highlighter` / `.aui-openui
 
 ## Brand / logo
 
-**Base layouts** — pass `theme.brand` and the SDK positions the mark + name in the default slots:
+Set `brand.mode`, then pass the fields that mode requires. `name` always labels the
+mark (`alt` / `aria-label`).
+
+| Look         | `mode`         | Required                   | Expanded chrome           | Collapsed / compact |
+| ------------ | -------------- | -------------------------- | ------------------------- | ------------------- |
+| Default      | omit `brand`   | —                          | TrueForge wordmark        | TrueForge square    |
+| Icon + title | `'icon-title'` | `name` (+ optional `icon`) | square + title text       | square              |
+| Icon only    | `'icon-only'`  | `name`, `icon`             | square (no title text)    | square              |
+| Wide logo    | `'logo'`       | `name`, `icon`, `logo`     | wide logo (no title text) | square              |
 
 ```tsx
 <TrueForgeUI
@@ -327,15 +335,28 @@ package). Host CSS on `.aui-markdown` / `.aui-syntax-highlighter` / `.aui-openui
   layout="sidebar"
   theme={{
     brand: {
+      mode: 'icon-title',
       name: 'Acme',
-      logo: '/brand/logo.svg',
+      icon: '/brand/icon.svg',
     },
   }}
 />
 ```
 
-**Light / dark marks** — pass `light` / `dark` sources instead and the SDK picks the one matching
-the resolved mode. `href` wraps the logo in a same-tab link:
+Icon-only chrome (`name` kept for alt):
+
+```tsx
+theme={{
+  brand: {
+    mode: 'icon-only',
+    name: 'Acme',
+    icon: '/brand/icon.svg',
+  },
+}}
+```
+
+Wide logo for expanded chrome. A square `icon` is required because collapsed chrome,
+the welcome screen, and the widget button continue to use the square asset:
 
 ```tsx
 <TrueForgeUI
@@ -343,14 +364,19 @@ the resolved mode. `href` wraps the logo in a same-tab link:
   layout="sidebar"
   theme={{
     brand: {
+      mode: 'logo',
       name: 'Acme',
-      logo: { light: '/brand/logo-light.svg', dark: '/brand/logo-dark.svg', href: '/' },
+      icon: '/brand/icon.svg',
+      logo: '/brand/wordmark.svg',
+      href: '/',
     },
   }}
 />
 ```
 
-Set only one mode and it is used for both. `name` labels the image, so no `alt` is needed.
+Both `icon` and `logo` accept `{ src, light, dark }`. The SDK picks the source matching the
+resolved theme mode; setting only one light/dark source uses it for both. `href` wraps
+configured images in a same-tab link.
 
 **Component marks** — `theme.brand` takes image URLs only. To render an inline SVG or a custom
 component, override the `BrandLogo` slot, the same way you replace any other atom:
@@ -359,7 +385,10 @@ component, override the `BrandLogo` slot, the same way you replace any other ato
 <TrueForgeUI server={server} layout="sidebar" overrides={{ BrandLogo: MyMark }} />
 ```
 
-**Custom layouts** — import `BrandLogo` and place it anywhere; pair it with `useBrandName()` when you also want the name as text (see [Custom layouts](#custom-layouts)).
+**Custom layouts** — import `BrandLogo` and use `variant="icon"` for compact surfaces or
+`variant="logo"` for expanded chrome. Prefer `resolveBrandChrome(useBrand())` so expanded
+vs collapsed choices match the base layouts. Pair with `useBrandName()` when chrome should
+show the title text (see [Custom layouts](#custom-layouts)).
 
 > _Screenshot: external brand mark rendered in the base layout header._
 
@@ -371,12 +400,14 @@ component, override the `BrandLogo` slot, the same way you replace any other ato
 
 | Mode                                   | Layout chrome                   | Agent selection / New Chat                                |
 | -------------------------------------- | ------------------------------- | --------------------------------------------------------- |
-| `AgentLibraryWithComposer` _(default)_ | Agents Library + draft builder  | New Chat opens draft; library picks a named agent         |
+| `AgentLibraryWithComposer` _(default)_ | Agents + draft builder          | New Chat opens draft; library picks a named agent         |
 | `SingleAgent`                          | Named-only, plain composer      | Locked to `name`; New Chat / Clear Chat = new thread      |
-| `AgentLibrary`                         | Agents Library only (no draft)  | Empty until pick; no New Chat; Clear Chat after selection |
+| `AgentLibrary`                         | Agents only (no draft)          | Empty until pick; no New Chat; Clear Chat after selection |
 | `AgentComposer`                        | Draft builder only (no library) | Always draft; New Chat / Clear Chat = fresh draft         |
 
-In library modes, picking an agent from the Agents Library switches to a named chat for that agent **and remounts the runtime** so the new agent starts from a clean conversation. Draft chats can be promoted via **Save agent** (`server.saveAgent` on the resolved `AgentUIServer`). **Clear Chat** (thread header) resets the current named or draft session.
+In library modes, picking an agent from Agents switches to a named chat for that agent **and remounts the runtime** so the new agent starts from a clean conversation. Draft chats can be promoted via **Save agent** (`server.saveAgent` on the resolved `AgentUIServer`). **Clear Chat** (thread header) resets the current named or draft session.
+
+Mutable composers expose **Agent Config** for live model parameters, instructions, runtime behavior, per-connector MCP tools, and skills. Runtime Config opens in a second right-side drawer. The compact Tools picker contains only Connectors and Skills. The Save Agent drawer only edits the agent name while preserving the active draft configuration; cancelling it discards that local edit. Model context and output limits render when the server supplies that optional catalog metadata.
 
 ```tsx
 {
@@ -407,7 +438,7 @@ In library modes, picking an agent from the Agents Library switches to a named c
 />;
 ```
 
-> _Screenshot: Agents Library open; selecting an agent resets the thread._
+> _Screenshot: Agents open; selecting an agent resets the thread._
 
 ---
 
@@ -415,12 +446,12 @@ In library modes, picking an agent from the Agents Library switches to a named c
 
 Built-in `layout` values:
 
-| Value     | Description                                              |
-| --------- | -------------------------------------------------------- |
-| `sidebar` | Left session list + main thread (ChatGPT / Claude style) |
-| `drawer`  | Full-bleed thread; sessions open in a slide-over         |
-| `dock`    | Fixed-width right panel; list XOR thread stack           |
-| `widget`  | Same stack as `dock`, opened from a bottom-right FAB     |
+| Value     | Description                                          |
+| --------- | ---------------------------------------------------- |
+| `sidebar` | Icon rail + recent session history + active thread   |
+| `drawer`  | Full-bleed thread; sessions open in a slide-over     |
+| `dock`    | Fixed-width right panel; list XOR thread stack       |
+| `widget`  | Same stack as `dock`, opened from a bottom-right FAB |
 
 ---
 
@@ -429,17 +460,15 @@ Built-in `layout` values:
 For full control, pass a React component as `layout`. The SDK still wires server, shell mode, slots, and runtime behind it.
 
 ```tsx
-import { Thread, ThreadListContainer, BrandLogo, useBrandName, useTheme } from '@truefoundry/trueforge-ui';
+import { Thread, ThreadListContainer, BrandLogo, useTheme } from '@truefoundry/trueforge-ui';
 
 function Layout({ className }: { className?: string }) {
   const { mode, setTheme } = useTheme();
-  const brandName = useBrandName();
 
   return (
     <div className={className} style={{ display: 'flex', height: '100%' }}>
       <aside style={{ width: 256 }}>
-        <BrandLogo className="size-6" />
-        <span>{brandName}</span>
+        <BrandLogo variant="logo" className="h-6 w-auto max-w-40" />
         <ThreadListContainer />
       </aside>
       <main style={{ flex: 1, minWidth: 0 }}>
@@ -488,7 +517,7 @@ function MyBubble({ children, error, actionBar, className }: AssistantMessageBub
 />;
 ```
 
-Overridable slots include composer pieces (`ComposerShell`, `ComposerLeftSection`, `ComposerRightSection`, `ComposerSendButton`), messages (`AssistantMessageBubble`, `UserMessageBubble`, `UserMessageEdit`), `Markdown`, `WelcomeScreen`, thread-list atoms, and tool/prompt cards (`ToolCallCard`, `ToolApprovalBar`, `ToolGroupCard`, `SubAgentCard`, `SandboxToolCallCard`, `AgentStepsCard`, `ReasoningCard`, `AskUserPrompt`, `McpAuthPrompt`, and more).
+Overridable slots include composer pieces (`ComposerShell`, `ComposerLeftSection`, `ComposerRightSection`, `ComposerSendButton`), messages (`AssistantMessageBubble`, `UserMessageBubble`, `UserMessageEdit`), `Markdown`, `WelcomeScreen`, thread-list atoms, agent metrics (`AgentMetrics`, `AgentMetricsView`, `AgentMetricsTimeRangeFilter`, `AgentMetricCard`, `AgentMetricStatistics`, `AgentMetricChart`), and tool/prompt cards (`ToolCallCard`, `ToolApprovalBar`, `ToolGroupCard`, `SubAgentCard`, `SandboxToolCallCard`, `AgentStepsCard`, `ReasoningCard`, `AskUserPrompt`, `McpAuthPrompt`, and more).
 
 See [docs/customization.md](./docs/customization.md) for the full slot list.
 
@@ -506,6 +535,7 @@ type TrueForgeServerConfig =
       apiKey: string;
       controlPlaneURL: string;
       gatewayPlaneURL?: string;
+      permissions?: PermissionsServer;
     }
   | {
       type: 'trueforge';
@@ -513,16 +543,36 @@ type TrueForgeServerConfig =
       token?: string;
       fetch?: typeof fetch;
       catalog?: CatalogServer;
+      permissions?: PermissionsServer;
     }
   | AgentUIServer;
 
-type AgentUIServer = AgentChatServer & AgentBuilderServer & { catalog?: CatalogServer };
+type AgentUIServer = AgentChatServer &
+  AgentBuilderServer & {
+    catalog?: CatalogServer;
+    sessions?: AgentSessionsServer;
+    metrics?: AgentMetricsServer;
+    schedules?: ScheduleServer;
+    permissions?: PermissionsServer;
+  };
 ```
 
 | Port                 | Responsibility                                                      |
 | -------------------- | ------------------------------------------------------------------- |
 | `AgentChatServer`    | Sessions, turns, streaming, draft `AgentSpec` sync                  |
 | `AgentBuilderServer` | `getModels` / `getSkills` / `getMcp` / `searchAgents` / `saveAgent` |
+| `catalog`            | Settings CRUD (models / connectors / optional skills & sandbox)     |
+| `sessions`           | Agent details + sessions browser (`/sessions`, `/library/:agentId`) |
+| `schedules`          | Schedules page (`/schedules`)                                       |
+| `AgentMetricsServer` | Agent meter aggregates, chart definitions, and chart data           |
+| `PermissionsServer`  | Per-resource `USE`, `MANAGE`, and `DELETE` grants                   |
+
+Omit a chrome port such as `catalog` or `schedules` to hide and unregister its routes.
+
+When `permissions` is omitted from a custom or TrueFoundry server, actions remain enabled for backward compatibility.
+When provided, denied mutation controls stay visible but disabled with an explanatory tooltip. The built-in
+`type: "trueforge"` server enables checks automatically through the Harness permissions endpoint; an explicit
+`PermissionsServer` overrides that default.
 
 **Zero-config TrueFoundry** — see [Getting started](#getting-started). The SDK calls `createTrueFoundryAgentUIServer` for you.
 
@@ -587,6 +637,7 @@ See [docs/server.md](./docs/server.md) for the full method list and BYO guidance
 | `TrueForgeServerConfig`                                            | Type       | `server` prop: `truefoundry` / `trueforge` / `AgentUIServer` |
 | `createTrueFoundryServer`                                          | Function   | Compose chat + builder into `AgentUIServer`                  |
 | `Thread`, `ThreadListContainer`, `BrandLogo`                       | Components | Layout primitives for custom layouts                         |
+| `resolveBrandChrome`, `useBrandName`, `useBrand`                   | Helpers    | Brand chrome look + name for custom layouts                  |
 | Composer / message / tool atoms                                    | Components | Overridable, themeable building blocks                       |
 | `SlotsProvider`, `useSlot`, `useTheme`                             | API        | Overrides + theme mode                                       |
 | `AgentUIServer`, `AgentChatServer`, `AgentBuilderServer`           | Types      | Resolved server contract                                     |

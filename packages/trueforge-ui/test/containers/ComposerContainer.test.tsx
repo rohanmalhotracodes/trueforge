@@ -3,8 +3,12 @@ import type { AppendMessage } from '@assistant-ui/react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ComposerContainer } from '@/containers/ComposerContainer.js';
+import { canSubmitComposer, ComposerContainer } from '@/containers/ComposerContainer.js';
 import { ComposerBusyProvider } from '@/hooks/useComposerBusyState.js';
+import {
+  CustomActionRenderersProvider,
+  type CustomActionRendererProps,
+} from '@/server/CustomActionRenderersContext.js';
 import { ShellModeProvider } from '@/server/ShellModeContext.js';
 import { SlotsProvider } from '@/theme/SlotsProvider.js';
 import { RuntimeHarness } from './RuntimeHarness.js';
@@ -13,11 +17,35 @@ const agentSpecState: { agentSpec: { model: { name: string } } | undefined } = {
   agentSpec: { model: { name: 'test/model' } },
 };
 
+const toolResponsesState = vi.hoisted(() => ({
+  pending: [] as Array<{ toolCallId: string; toolName?: string; args?: Record<string, unknown> }>,
+  respond: vi.fn(),
+}));
+
+const approvalsState = vi.hoisted(() => ({
+  pending: [] as Array<{
+    approvalId: string;
+    threadId: string;
+    toolName: string;
+    args: Record<string, unknown>;
+    argsText: string;
+  }>,
+}));
+
 vi.mock('@truefoundry/assistant-ui-runtime', () => ({
   useTrueFoundryCancel: () => vi.fn(),
-  useTrueFoundryToolResponses: () => ({ pending: [] }),
+  useTrueFoundryToolResponses: () => toolResponsesState,
+  useTrueFoundryApprovals: () => approvalsState,
   useTrueFoundryAgentSpec: () => ({ agentSpec: agentSpecState.agentSpec }),
 }));
+
+function SecretSelectProbe({ onSubmit }: CustomActionRendererProps) {
+  return (
+    <button type="button" onClick={() => onSubmit('chosen-secret')}>
+      Secret selector
+    </button>
+  );
+}
 
 function renderComposer(onNew?: (message: AppendMessage) => Promise<void>) {
   return render(
@@ -29,9 +57,51 @@ function renderComposer(onNew?: (message: AppendMessage) => Promise<void>) {
   );
 }
 
+describe('canSubmitComposer', () => {
+  it.each([
+    { name: 'New Chat', requiresModel: true, hasModel: true },
+    { name: 'Try Agent', requiresModel: false, hasModel: false },
+    { name: 'Build Agent', requiresModel: true, hasModel: true },
+  ])('allows attachment-only submission in $name', ({ requiresModel, hasModel }) => {
+    expect(
+      canSubmitComposer({
+        disabled: false,
+        hasText: false,
+        hasAttachments: true,
+        requiresModel,
+        hasModel,
+      }),
+    ).toBe(true);
+  });
+
+  it('blocks empty messages and mutable drafts without a model', () => {
+    expect(
+      canSubmitComposer({
+        disabled: false,
+        hasText: false,
+        hasAttachments: false,
+        requiresModel: false,
+        hasModel: false,
+      }),
+    ).toBe(false);
+    expect(
+      canSubmitComposer({
+        disabled: false,
+        hasText: false,
+        hasAttachments: true,
+        requiresModel: true,
+        hasModel: false,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('ComposerContainer', () => {
   beforeEach(() => {
     agentSpecState.agentSpec = { model: { name: 'test/model' } };
+    toolResponsesState.pending = [];
+    toolResponsesState.respond = vi.fn();
+    approvalsState.pending = [];
   });
   it('wraps the composer in an attachment dropzone by default', () => {
     renderComposer();
@@ -140,5 +210,54 @@ describe('ComposerContainer', () => {
 
     expect(screen.getByText('Custom left')).toBeInTheDocument();
     expect(screen.getByText('Custom right')).toBeInTheDocument();
+  });
+
+  it('mounts a registered custom action renderer instead of the composer', () => {
+    toolResponsesState.pending = [{ toolCallId: 'tc-1', toolName: 'secret_select', args: { secrets: ['a'] } }];
+
+    render(
+      <CustomActionRenderersProvider renderers={{ secret_select: SecretSelectProbe }}>
+        <RuntimeHarness messages={[]}>
+          <ComposerBusyProvider>
+            <ComposerContainer />
+          </ComposerBusyProvider>
+        </RuntimeHarness>
+      </CustomActionRenderersProvider>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Secret selector' })).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Message input' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Secret selector' }));
+    expect(toolResponsesState.respond).toHaveBeenCalledWith({
+      toolCallId: 'tc-1',
+      content: 'chosen-secret',
+    });
+  });
+
+  it('shows the approval banner above a disabled composer while approvals are pending', () => {
+    approvalsState.pending = [
+      {
+        approvalId: 'appr-1',
+        threadId: 'root',
+        toolName: 'call_tool',
+        args: {},
+        argsText: '{}',
+      },
+      {
+        approvalId: 'appr-2',
+        threadId: 'root',
+        toolName: 'call_tool',
+        args: {},
+        argsText: '{}',
+      },
+    ];
+
+    renderComposer();
+
+    expect(screen.getByText('2 tools need your input')).toBeInTheDocument();
+    expect(screen.getByText('(1/2)')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Message input' })).toBeDisabled();
+    expect(document.querySelector('[data-slot="aui_composer-approval-pause"]')).toBeInTheDocument();
   });
 });

@@ -24,8 +24,8 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import { ulid } from 'ulid';
 import type { Logger } from 'winston';
+import { newId } from '../../../utils/id';
 import {
   assertCodeModeSocketParentPath,
   CodeModeUdsTransport,
@@ -56,7 +56,7 @@ const DEFAULT_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const SUPPORT_PROBE_TIMEOUT_MS = 5_000;
 const VENV_CREATE_TIMEOUT_MS = 60_000;
 const VENV_PIP_TIMEOUT_MS = 120_000;
-/** Same pin as the Daytona image / git_downloader.py PEP 723 header. */
+/** Same pin as the Daytona image / skill_downloader.py PEP 723 header. */
 const VENV_PYDANTIC_PIN = 'pydantic>=2.0.0,<3.0.0';
 
 /** Command names resolved via `command -v` (PATH from sandbox policy). */
@@ -590,7 +590,7 @@ export class LocalSandboxProvider implements SandboxProvider {
 
   async createSandbox(): Promise<{ sandboxId: string }> {
     await this.ensureSrt();
-    const sandboxId = await createSandbox(join(this.sandboxRootPathParent, ulid().toLowerCase()));
+    const sandboxId = await createSandbox(join(this.sandboxRootPathParent, newId()));
     this.logger.info('LocalSandboxProvider created sandbox', {
       sandboxId,
       shell: this.support.shell,
@@ -663,7 +663,7 @@ export class LocalSandboxProvider implements SandboxProvider {
 
   // Cwd-relative: SRT cwd is the sandbox root. Init mkdir/ln and the agent prompt must not use
   // host-absolute paths — those contain spaces under macOS Application Support and lose quoting.
-  //   uploads, skills, tool-results, git_downloader.py, .git-credentials, .venv
+  //   uploads, skills, tool-results, skill_downloader.py, .git-credentials, .venv
   //   mcp-client/mcp_client.py
   getToolResultDumpDir(): string {
     return 'tool-results';
@@ -681,8 +681,8 @@ export class LocalSandboxProvider implements SandboxProvider {
     return 'skills';
   }
 
-  getGitDownloaderPath(): string {
-    return 'git_downloader.py';
+  getSkillDownloaderPath(): string {
+    return 'skill_downloader.py';
   }
 
   async downloadFile(params: { sandboxId: string; path: string }): Promise<Buffer> {

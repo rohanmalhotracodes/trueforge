@@ -147,6 +147,10 @@ export class SessionHandle<
     return this.session.custom;
   }
 
+  get metadata(): SessionRecord<TSessionCustom>['metadata'] {
+    return this.session.metadata;
+  }
+
   get record(): SessionRecord<TSessionCustom> {
     return this.session;
   }
@@ -463,6 +467,7 @@ export class SessionHandle<
         isChild,
         sandboxAvailable: Boolean(input.sandbox),
         tracing: input.tracing,
+        webSearchProvider: input.resolver.webSearchProvider,
         logger: input.resolver.logger,
       }),
       ...(extraCapabilities ?? []),
@@ -518,6 +523,7 @@ export class SessionHandle<
           isChild: true,
           sandboxAvailable: Boolean(input.sandbox),
           tracing: input.tracing,
+          webSearchProvider: input.resolver.webSearchProvider,
           logger: input.resolver.logger,
         }),
         ...(extraCapabilities ?? []),

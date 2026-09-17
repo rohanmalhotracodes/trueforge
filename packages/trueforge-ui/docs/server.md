@@ -144,7 +144,7 @@ interface AgentBuilderServer<
   getModels(): Promise<TModel[]>;
   getSkills(): Promise<TSkill[]>;
   getMcp(): Promise<TMcp[]>;
-  /** Search / list named agents for the Agents Library. */
+  /** Search / list named agents for the Agents. */
   searchAgents(req?: { query?: string; limit?: number; offset?: number }): Promise<TAgent[]>;
   /** Promote draft AgentSpec → named agent */
   saveAgent(req: { agentName: string; agentSpec: AgentSpec; draftSessionId?: string }): Promise<TSave>;
@@ -305,6 +305,14 @@ interface AgentSpec {
   config?: RuntimeConfig;
 }
 
+interface CompactionConfig {
+  enabled?: boolean;
+  trigger?: {
+    type: 'input_tokens';
+    value: number;
+  };
+}
+
 interface Model {
   name: string;
   params?: ModelParams;
@@ -379,10 +387,7 @@ interface RuntimeConfig {
   };
   dynamicSubAgents?: { enabled?: boolean };
   contextManagement?: {
-    compaction?: {
-      enabled?: boolean;
-      compactionThresholdTokens?: number;
-    };
+    compaction?: CompactionConfig;
     largeToolResponse?: { enabled?: boolean };
   };
   generativeUi?: { enabled?: boolean };
@@ -803,7 +808,9 @@ export function App() {
       theme={{
         preset: 'chatgpt',
         brand: {
+          mode: 'logo',
           name: 'MyCo',
+          icon: { src: '/myco-icon.svg' },
           logo: { src: '/myco-wordmark.svg' },
         },
       }}
