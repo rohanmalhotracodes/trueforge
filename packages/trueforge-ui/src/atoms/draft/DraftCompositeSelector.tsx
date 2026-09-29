@@ -1,6 +1,6 @@
 'use client';
 
-import { useTrueFoundryAgentSpec, useTrueFoundryUpdateAgentSpec } from '@truefoundry/assistant-ui-runtime';
+import { useTrueForgeAgentSpec, useTrueForgeUpdateAgentSpec } from '@truefoundry/trueforge-assistant-ui-runtime';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { useMCPAuth } from '../../hooks/useMcpAuth.js';
@@ -17,13 +17,15 @@ import { useIsMobile } from '../lib/useIsMobile.js';
 import { BottomSheet } from '../primitives/BottomSheet.js';
 import { Button } from '../primitives/Button.js';
 import { CatalogLogo } from '../primitives/CatalogLogo.js';
+import { Checkbox } from '../primitives/Checkbox.js';
 import { Tooltip } from '../primitives/Tooltip.js';
 import { DraftCatalogEmptyState } from './DraftCatalogEmptyState.js';
 import { useDraftCatalog } from './DraftCatalogProvider.js';
 import { connectorsWithSelectedStubs } from './mcpConnectorStubs.js';
+import { skillFamilyId, skillRepoName } from './SkillVersionSelector.js';
 
 /** Catalog-backed mount shape used by the draft picker (runtime mounts stay opaque). */
-export type DraftMount = { id: string; name: string };
+export type DraftMount = { id: string; name: string; preload?: boolean };
 
 /**
  * Harness wire mounts are name-keyed (`{ name }` only). Catalog rows use
@@ -38,7 +40,13 @@ export function draftMountsFromSpec(value: unknown): DraftMount[] {
     const name = Reflect.get(item, 'name');
     if (typeof name !== 'string') continue;
     const id = Reflect.get(item, 'id');
-    mounts.push({ id: typeof id === 'string' ? id : name, name });
+    const displayName = Reflect.get(item, 'display_name');
+    const preload = Reflect.get(item, 'preload');
+    mounts.push({
+      id: typeof id === 'string' ? id : name,
+      name: typeof displayName === 'string' ? displayName : name,
+      ...(typeof preload === 'boolean' ? { preload } : {}),
+    });
   }
   return mounts;
 }
@@ -51,25 +59,10 @@ const TABS: { id: AttachTab; label: string; icon: string }[] = [
 
 const SPEC_FLUSH_MS = 300;
 
-function Checkbox({ checked }: { checked: boolean }) {
-  return (
-    <span
-      className={cn(
-        'flex size-4 shrink-0 items-center justify-center rounded border',
-        checked
-          ? 'border-primary-button-bg bg-primary-button-bg text-primary-button-text'
-          : 'border-input-border bg-input-box-bg',
-      )}
-      aria-hidden
-    >
-      {checked ? <Icon name="check" className="size-3" /> : null}
-    </span>
-  );
-}
-
 export function CatalogRow({
   title,
   description,
+  badge,
   logo,
   fallbackIcon,
   checked,
@@ -80,6 +73,7 @@ export function CatalogRow({
 }: {
   title: string;
   description?: string;
+  badge?: ReactNode;
   /** Catalog logo URL; when absent, `fallbackIcon` (or the title initial) is shown. */
   logo?: string | undefined;
   fallbackIcon?: string;
@@ -104,7 +98,10 @@ export function CatalogRow({
         )}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="text-text-primary block truncate text-sm font-medium">{title}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="text-text-primary truncate text-sm font-medium">{title}</span>
+          {badge}
+        </span>
         {description ? <span className="text-text-secondary line-clamp-1 text-xs">{description}</span> : null}
       </span>
     </>
@@ -125,7 +122,13 @@ export function CatalogRow({
         }}
       >
         {content}
-        <span className="shrink-0">{action}</span>
+        <span
+          className="shrink-0"
+          onClick={event => event.stopPropagation()}
+          onKeyDown={event => event.stopPropagation()}
+        >
+          {action}
+        </span>
         <button
           type="button"
           role="checkbox"
@@ -245,8 +248,8 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
   const capabilities = useServerCapabilities();
   const settingsCatalog = useOptionalCatalogServer();
   const shell = useOptionalShellMode();
-  const { agentSpec } = useTrueFoundryAgentSpec();
-  const updateAgentSpec = useTrueFoundryUpdateAgentSpec();
+  const { agentSpec } = useTrueForgeAgentSpec();
+  const updateAgentSpec = useTrueForgeUpdateAgentSpec();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<AttachTab>('connectors');
   const [query, setQuery] = useState('');
@@ -281,7 +284,6 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
   const selectedMcp = open ? localMcp : specMcp;
   const selectedSkills = open ? localSkills : specSkills;
   const selectedMcpIds = useMemo(() => new Set(selectedMcp.map(m => m.id)), [selectedMcp]);
-  const selectedSkillIds = useMemo(() => new Set(selectedSkills.map(s => s.id)), [selectedSkills]);
   const hasValidModel = Boolean(agentSpec?.model?.name.trim());
   const toolsCount = selectedMcp.length + selectedSkills.length;
   const toolsTooltip = useMemo(() => {
@@ -383,7 +385,10 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
     const needle = query.trim().toLowerCase();
     if (!needle) return skills;
     return skills.filter(
-      s => s.name.toLowerCase().includes(needle) || (s.description?.toLowerCase().includes(needle) ?? false),
+      skill =>
+        skill.name.toLowerCase().includes(needle) ||
+        (skillRepoName(skill)?.toLowerCase().includes(needle) ?? false) ||
+        (skill.description?.toLowerCase().includes(needle) ?? false),
     );
   }, [skills, query]);
 
@@ -396,11 +401,11 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
     [filteredConnectors, pinnedMcpIds],
   );
   const pinnedSelectedSkills = useMemo(
-    () => filteredSkills.filter(s => pinnedSkillIds.has(s.id)),
+    () => filteredSkills.filter(s => pinnedSkillIds.has(skillFamilyId(s.id))),
     [filteredSkills, pinnedSkillIds],
   );
   const pinnedAvailableSkills = useMemo(
-    () => filteredSkills.filter(s => !pinnedSkillIds.has(s.id)),
+    () => filteredSkills.filter(s => !pinnedSkillIds.has(skillFamilyId(s.id))),
     [filteredSkills, pinnedSkillIds],
   );
 
@@ -415,11 +420,12 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
   };
 
   const toggleSkill = (skill: AgentSkill) => {
-    const adding = !localSkillsRef.current.some(item => item.id === skill.id);
-    setLocalSkills(prev =>
-      prev.some(s => s.id === skill.id)
-        ? prev.filter(s => s.id !== skill.id)
-        : [...prev, { id: skill.id, name: skill.name }],
+    const family = skillFamilyId(skill.id);
+    const adding = !localSkillsRef.current.some(item => skillFamilyId(item.id) === family);
+    setLocalSkills(previous =>
+      previous.some(item => skillFamilyId(item.id) === family)
+        ? previous.filter(item => skillFamilyId(item.id) !== family)
+        : [...previous, { id: skill.id, name: skill.name }],
     );
     if (adding && capabilities?.sandbox.enabled === true) {
       updateAgentSpec?.({
@@ -433,6 +439,28 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
     scheduleFlush();
   };
 
+  const renderSkill = (skill: AgentSkill) => {
+    const selected = selectedSkills.find(mount => skillFamilyId(mount.id) === skillFamilyId(skill.id));
+    const repoName = skillRepoName(skill);
+    return (
+      <CatalogRow
+        key={skill.id}
+        title={skill.name}
+        description={skill.description}
+        badge={
+          repoName === undefined ? undefined : (
+            <span className="bg-primary-button-bg/10 text-primary-button-bg shrink-0 rounded-full px-1.5 py-0.5 text-[0.625rem]">
+              {repoName}
+            </span>
+          )
+        }
+        checked={selected !== undefined}
+        disabled={skillsDisabled && selected === undefined}
+        onToggle={() => toggleSkill(skill)}
+      />
+    );
+  };
+
   const openPicker = (nextTab?: AttachTab) => {
     if (nextTab != null) {
       setTab(nextTab);
@@ -444,7 +472,7 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
     dirtyRef.current = false;
     clearFlushTimer();
     setPinnedMcpIds(new Set(specMcp.map(m => m.id)));
-    setPinnedSkillIds(new Set(specSkills.map(s => s.id)));
+    setPinnedSkillIds(new Set(specSkills.map(skill => skillFamilyId(skill.id))));
     setOpen(true);
   };
 
@@ -558,31 +586,13 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
               {pinnedSelectedSkills.length > 0 ? (
                 <>
                   <SectionHeading label="Selected" count={pinnedSelectedSkills.length} />
-                  {pinnedSelectedSkills.map(s => (
-                    <CatalogRow
-                      key={s.id}
-                      title={s.name}
-                      description={s.description}
-                      checked={selectedSkillIds.has(s.id)}
-                      disabled={skillsDisabled && !selectedSkillIds.has(s.id)}
-                      onToggle={() => toggleSkill(s)}
-                    />
-                  ))}
+                  {pinnedSelectedSkills.map(renderSkill)}
                 </>
               ) : null}
               {pinnedAvailableSkills.length > 0 ? (
                 <>
                   <SectionHeading label="Available" count={pinnedAvailableSkills.length} />
-                  {pinnedAvailableSkills.map(s => (
-                    <CatalogRow
-                      key={s.id}
-                      title={s.name}
-                      description={s.description}
-                      checked={selectedSkillIds.has(s.id)}
-                      disabled={skillsDisabled && !selectedSkillIds.has(s.id)}
-                      onToggle={() => toggleSkill(s)}
-                    />
-                  ))}
+                  {pinnedAvailableSkills.map(renderSkill)}
                 </>
               ) : null}
               {filteredSkills.length === 0 ? (
@@ -681,7 +691,7 @@ export function DraftCompositeSelector({ disabled, isRunning, onAttach }: DraftC
             id={menuId}
             role="dialog"
             aria-label="Add to composer"
-            className="bg-card-bg text-text-primary absolute bottom-full left-0 z-50 mb-2 flex h-[22rem] w-[28rem] max-w-[min(28rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border border-border shadow-lg"
+            className="aui-popup-enter bg-card-bg text-text-primary absolute bottom-full left-0 z-50 mb-2 flex h-[22rem] w-[28rem] max-w-[min(28rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border border-border shadow-lg"
           >
             {content}
           </div>

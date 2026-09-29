@@ -1,18 +1,23 @@
-import type { AgentSpec } from '@truefoundry/trueforge-core/agent-session';
+import type { AgentSpec, TokenPagination } from '@truefoundry/trueforge-core/agent-session';
 import { sql, type Kysely, type Transaction } from 'kysely';
 import type { RequestContext } from '../auth/identity';
 import {
+  type AgentExternalIdRow,
   type AgentRecord,
   type CreateAgentInput,
   type DeleteAgentInput,
   type GetAgentInput,
+  type GetExternalIdsByIdsInput,
+  type GetOwnedIdsInput,
   type IAgentStore,
   type ListAgentsInput,
   type UpdateAgentInput,
 } from '../db/agentStore';
 import { PostgresAgentStore } from '../db/postgres/agent-store/PostgresAgentStore';
 import type { Database } from '../db/postgres/types';
-import { callerAccessToken, type ResolveAccessToken } from './accessToken';
+import { AGENT_DESCRIPTION_MAX_LENGTH } from '../schemas/agent';
+import { captureCriticalException } from '../sentry';
+import { callerAccessToken, type ResolveServiceFoundryAuthorization } from './accessToken';
 import {
   TrueFoundryServiceFoundryServerClient,
   type PutRemoteAgentInput,
@@ -24,16 +29,21 @@ function asError(value: unknown): Error {
 
 function toPutRemoteAgentPayload({
   name,
+  description,
   manifest,
+  trueFoundryManagedAgentId,
 }: {
   name: string;
+  description: string;
   manifest: AgentSpec;
+  trueFoundryManagedAgentId?: string;
 }): Omit<PutRemoteAgentInput, 'accessToken'> {
   return {
     name,
-    description: name,
+    description: (description || name).slice(0, AGENT_DESCRIPTION_MAX_LENGTH),
     model: manifest.model.name,
     mcp_servers: (manifest.mcp_servers ?? []).map(server => server.name),
+    ...(trueFoundryManagedAgentId ? { trueFoundryManagedAgentId } : {}),
   };
 }
 
@@ -52,11 +62,11 @@ function toPutRemoteAgentPayload({
  *   update(external_id) fails after put: delete remote (if put returned an id), then
  *   delete local; if cleanup also fails, AggregateError (primary + cleanup errors).
  *
- * update (manifest)
- *   Happy path: lock → load row → put remote (new manifest) → write local.
+ * update (manifest and/or description)
+ *   Happy path: lock → load row → put remote (new values) → write local.
  *   Missing row: return undefined (no remote call).
  *   putRemote fails: leave local unchanged; rethrow.
- *   local write fails after put: best-effort putRemote(old manifest); if restore fails,
+ *   local write fails after put: best-effort putRemote(old values); if restore fails,
  *   AggregateError; if restore ok, rethrow the DB error (local still old, remote restored).
  *   external_id-only patches skip ServiceFoundry and go straight to the inner store.
  *
@@ -68,7 +78,7 @@ function toPutRemoteAgentPayload({
 export class TrueFoundryAgentStore implements IAgentStore<Transaction<Database>> {
   readonly #inner: PostgresAgentStore;
   readonly #client: TrueFoundryServiceFoundryServerClient;
-  readonly #resolveAccessToken: ResolveAccessToken;
+  readonly #resolveAccessToken: ResolveServiceFoundryAuthorization;
   readonly #db: Kysely<Database>;
 
   constructor(input: {
@@ -83,8 +93,22 @@ export class TrueFoundryAgentStore implements IAgentStore<Transaction<Database>>
     this.#db = input.db;
   }
 
-  listAgents(input: ListAgentsInput, transaction?: Transaction<Database>): Promise<AgentRecord[]> {
+  listAgents(
+    input: ListAgentsInput,
+    transaction?: Transaction<Database>,
+  ): Promise<{ data: AgentRecord[]; pagination: TokenPagination }> {
     return this.#inner.listAgents(input, transaction);
+  }
+
+  getOwnedIds(input: GetOwnedIdsInput, transaction?: Transaction<Database>): Promise<readonly string[]> {
+    return this.#inner.getOwnedIds(input, transaction);
+  }
+
+  getExternalIdsByIds(
+    input: GetExternalIdsByIdsInput,
+    transaction?: Transaction<Database>,
+  ): Promise<readonly AgentExternalIdRow[]> {
+    return this.#inner.getExternalIdsByIds(input, transaction);
   }
 
   getAgent(input: GetAgentInput, transaction?: Transaction<Database>): Promise<AgentRecord | undefined> {
@@ -115,9 +139,15 @@ export class TrueFoundryAgentStore implements IAgentStore<Transaction<Database>>
 
     let externalId: string | undefined;
     try {
+      const trueFoundryManagedAgentId = input.custom?.['trueFoundryManagedAgentId'] as string | undefined;
       ({ externalId } = await this.#client.putRemoteAgent({
         accessToken: await this.#resolveAccessToken(),
-        ...toPutRemoteAgentPayload({ name: input.name, manifest: input.manifest }),
+        ...toPutRemoteAgentPayload({
+          name: input.name,
+          description: input.description,
+          manifest: input.manifest,
+          ...(trueFoundryManagedAgentId ? { trueFoundryManagedAgentId } : {}),
+        }),
       }));
       const updated = await this.#inner.updateAgent(
         { tenant_id: input.tenant_id, id: created.id, external_id: externalId },
@@ -131,7 +161,10 @@ export class TrueFoundryAgentStore implements IAgentStore<Transaction<Database>>
       const failures = [asError(error)];
       if (externalId !== undefined) {
         try {
-          await this.#client.deleteRemoteAgent({ accessToken: await this.#resolveAccessToken(), externalId });
+          await this.#client.deleteRemoteAgent({
+            accessToken: await this.#resolveAccessToken(),
+            externalId,
+          });
         } catch (cleanupError) {
           failures.push(asError(cleanupError));
         }
@@ -142,16 +175,27 @@ export class TrueFoundryAgentStore implements IAgentStore<Transaction<Database>>
         failures.push(asError(cleanupError));
       }
       if (failures.length > 1) {
-        throw new AggregateError(failures, 'createAgent failed and cleanup also failed', { cause: error });
+        const aggregate = new AggregateError(failures, 'createAgent failed and cleanup also failed', {
+          cause: error,
+        });
+        captureCriticalException(aggregate, {
+          tags: { module: 'TrueFoundryAgentStore', operation: 'dualWrite' },
+          extra: {
+            agent_id: created.id,
+            agent_name: created.name,
+            tenant_id: input.tenant_id,
+            external_id: externalId,
+          },
+        });
+        throw aggregate;
       }
       throw error;
     }
   }
 
   async updateAgent(input: UpdateAgentInput, transaction?: Transaction<Database>): Promise<AgentRecord | undefined> {
-    const nextManifest = input.manifest;
-    if (nextManifest === undefined) {
-      // No manifest means only `external_id` changed; pass through to the inner store.
+    if (input.manifest === undefined && input.description === undefined) {
+      // No manifest/description means only `external_id` changed; pass through to the inner store.
       return this.#inner.updateAgent(input, transaction);
     }
 
@@ -161,9 +205,16 @@ export class TrueFoundryAgentStore implements IAgentStore<Transaction<Database>>
         return undefined;
       }
 
+      const nextManifest = input.manifest ?? previous.manifest;
+      const nextDescription = input.description ?? previous.description;
+
       const { externalId } = await this.#client.putRemoteAgent({
         accessToken: await this.#resolveAccessToken(),
-        ...toPutRemoteAgentPayload({ name: previous.name, manifest: nextManifest }),
+        ...toPutRemoteAgentPayload({
+          name: previous.name,
+          description: nextDescription,
+          manifest: nextManifest,
+        }),
       });
 
       try {
@@ -171,7 +222,8 @@ export class TrueFoundryAgentStore implements IAgentStore<Transaction<Database>>
           {
             tenant_id: input.tenant_id,
             id: input.id,
-            manifest: nextManifest,
+            ...(input.manifest === undefined ? {} : { manifest: nextManifest }),
+            ...(input.description === undefined ? {} : { description: nextDescription }),
             ...(externalId === previous.external_id ? {} : { external_id: externalId }),
           },
           txn,
@@ -180,14 +232,28 @@ export class TrueFoundryAgentStore implements IAgentStore<Transaction<Database>>
         try {
           await this.#client.putRemoteAgent({
             accessToken: await this.#resolveAccessToken(),
-            ...toPutRemoteAgentPayload({ name: previous.name, manifest: previous.manifest }),
+            ...toPutRemoteAgentPayload({
+              name: previous.name,
+              description: previous.description,
+              manifest: previous.manifest,
+            }),
           });
         } catch (restoreError) {
-          throw new AggregateError(
+          const aggregate = new AggregateError(
             [asError(error), asError(restoreError)],
             'updateAgent failed and ServiceFoundry restore also failed',
             { cause: restoreError },
           );
+          captureCriticalException(aggregate, {
+            tags: { module: 'TrueFoundryAgentStore', operation: 'dualWrite' },
+            extra: {
+              agent_id: input.id,
+              agent_name: previous.name,
+              tenant_id: input.tenant_id,
+              external_id: previous.external_id,
+            },
+          });
+          throw aggregate;
         }
         throw error;
       }

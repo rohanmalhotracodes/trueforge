@@ -5,40 +5,39 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { createMockAgentUIServer, createMockCatalog } from '../server/mockServer.js';
 
-vi.mock('@truefoundry/assistant-ui-runtime', () => ({
-  trueFoundryAttachmentAdapter: {},
-  useTrueFoundryAgentRuntime: () =>
+vi.mock('@truefoundry/trueforge-assistant-ui-runtime', () => ({
+  trueForgeAttachmentAdapter: {},
+  useTrueForgeAgentRuntime: () =>
     useExternalStoreRuntime<ThreadMessageLike>({
       messages: [],
       isRunning: false,
       convertMessage: (message: ThreadMessageLike) => message,
       onNew: async () => {},
     }),
-  useTrueFoundryCancel: () => vi.fn(),
-  useTrueFoundryToolResponses: () => ({ pending: [] }),
-  useTrueFoundryApprovals: () => ({ pending: [] }),
-  useTrueFoundryRespondToToolApproval: () => vi.fn(),
-  useTrueFoundryMcpAuth: () => ({ pending: [], connect: vi.fn(), continue: vi.fn() }),
-  useTrueFoundryHistoryPagination: () => ({
+  useTrueForgeCancel: () => vi.fn(),
+  useTrueForgeToolResponses: () => ({ pending: [] }),
+  useTrueForgeApprovals: () => ({ pending: [] }),
+  useTrueForgeRespondToToolApproval: () => vi.fn(),
+  useTrueForgeMcpAuth: () => ({ pending: [], connect: vi.fn(), continue: vi.fn() }),
+  useTrueForgeHistoryPagination: () => ({
     isLoadingMore: false,
     hasMore: false,
     loadMore: vi.fn(),
   }),
-  useTrueFoundryAgentSpec: () => ({
+  useTrueForgeAgentSpec: () => ({
     agentSpec: { model: { name: 'openai-main/gpt-4.1' } },
   }),
-  useTrueFoundryFlushAgentSpec: () => async () => {},
-  useTrueFoundryAdoptAgentSpec: () => vi.fn(),
-  useTrueFoundryUpdateAgentSpec: () => vi.fn(),
+  useTrueForgeFlushAgentSpec: () => async () => {},
+  useTrueForgeAdoptAgentSpec: () => vi.fn(),
+  useTrueForgeUpdateAgentSpec: () => vi.fn(),
 }));
 
-vi.mock('@truefoundry/assistant-ui-runtime/plugins/truefoundry-agent-server-adapter', () => ({
-  createTrueFoundryAgentUIServer: vi.fn(
-    () =>
-      new Promise(() => {
-        /* never resolves — keep init loader visible */
-      }),
-  ),
+vi.mock('thinking-orbs', () => ({
+  ThinkingOrb: () => <div data-testid="thinking-orb" />,
+}));
+
+vi.mock('@/atoms/monacoPreload.js', () => ({
+  preloadMonaco: vi.fn(() => Promise.resolve({ editor: {} })),
 }));
 
 vi.mock('@/plugins/trueforge-agent-server-adapter/index.js', () => ({
@@ -56,6 +55,7 @@ vi.mock('@/plugins/trueforge-agent-server-adapter/index.js', () => ({
 }));
 
 import { AgentConfigInstructionsProvider } from '@/atoms/draft/AgentConfigInstructionsContext.js';
+import type { UserAvatarProps } from '@/atoms/UserAvatar.js';
 import { TrueForgeUI, type ChatLayout } from '@/containers/TrueForgeUI.js';
 import { DrawerLayout } from '@/layouts/DrawerLayout.js';
 import { SidebarLayout } from '@/layouts/SidebarLayout.js';
@@ -69,6 +69,10 @@ import { RuntimeHarness } from './RuntimeHarness.js';
 
 function mockServer(catalog?: CatalogServer) {
   return createMockAgentUIServer(catalog === undefined ? {} : { catalog });
+}
+
+function CustomUserAvatar({ labeled = false }: UserAvatarProps) {
+  return <div data-testid="custom-user-avatar">{labeled ? 'labeled user' : 'compact user'}</div>;
 }
 
 /** Minimal catalog stub — ShellActions only checks presence. */
@@ -133,6 +137,54 @@ describe('TrueForgeUI', () => {
       }
     });
     expect(container.querySelector('.h-96')).toBeInTheDocument();
+  });
+
+  it.each(layouts)('renders the current user in layout=%s chrome', async layout => {
+    render(
+      <TrueForgeUI
+        server={server}
+        agentConfig={{ mode: 'SingleAgent', name: 'my-agent' }}
+        layout={layout}
+        currentUser={{ displayName: 'Ada Lovelace' }}
+        className="h-96"
+      />,
+    );
+
+    if (layout === 'widget') {
+      fireEvent.click(await screen.findByRole('button', { name: 'Open chat' }));
+    }
+
+    const avatar = await screen.findByLabelText('Ada Lovelace');
+    expect(avatar.querySelector('[data-slot="avatar-fallback"]')).toHaveTextContent(/^A$/);
+    expect(avatar).toHaveTextContent('Ada Lovelace');
+    if (layout === 'sidebar') {
+      expect(avatar.closest('aside')).not.toBeNull();
+      expect(avatar).toHaveClass('w-14.5');
+    } else if (layout === 'drawer') {
+      expect(avatar.closest('header')).not.toBeNull();
+    } else {
+      expect(avatar.closest('footer')).not.toBeNull();
+    }
+  });
+
+  it.each(layouts)('honors overrides.UserAvatar in layout=%s', async layout => {
+    render(
+      <TrueForgeUI
+        server={server}
+        agentConfig={{ mode: 'SingleAgent', name: 'my-agent' }}
+        layout={layout}
+        overrides={{ UserAvatar: CustomUserAvatar }}
+        className="h-96"
+      />,
+    );
+
+    if (layout === 'widget') {
+      fireEvent.click(await screen.findByRole('button', { name: 'Open chat' }));
+    }
+
+    expect(await screen.findByTestId('custom-user-avatar')).toHaveTextContent(
+      layout === 'sidebar' ? 'labeled user' : 'compact user',
+    );
   });
 
   it('keeps the widget open across mutable runtime remounts', async () => {
@@ -243,7 +295,7 @@ describe('TrueForgeUI', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Save Agent' }));
     const saveDialog = await screen.findByRole('dialog', { name: 'Save agent' });
     expect(within(saveDialog).getByLabelText('Agent name')).toBeInTheDocument();
-    expect(within(saveDialog).queryByLabelText('Description')).not.toBeInTheDocument();
+    expect(within(saveDialog).getByLabelText('Description')).toBeInTheDocument();
     expect(within(saveDialog).queryByRole('button', { name: 'Edit Model' })).not.toBeInTheDocument();
     expect(within(saveDialog).queryByRole('button', { name: 'Edit Connectors' })).not.toBeInTheDocument();
     expect(getModels).toHaveBeenCalled();
@@ -291,22 +343,6 @@ describe('TrueForgeUI', () => {
       expect(screen.queryByRole('status', { name: 'Loading' })).not.toBeInTheDocument();
     });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  });
-
-  it('shows a loader while truefoundry server init is pending', () => {
-    render(
-      <TrueForgeUI
-        server={{
-          type: 'truefoundry',
-          apiKey: 'k',
-          controlPlaneURL: 'https://cp.example',
-        }}
-        layout="sidebar"
-        className="h-96"
-      />,
-    );
-
-    expect(screen.getByRole('status', { name: 'Loading' })).toBeInTheDocument();
   });
 });
 
@@ -369,11 +405,11 @@ describe('StackChatPanel', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Open schedules' }));
-    expect(await screen.findByRole('heading', { name: 'Scheduled Agents' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Agent Schedules' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Back to chat' }));
     await waitFor(() => {
-      expect(screen.queryByRole('heading', { name: 'Scheduled Agents' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Agent Schedules' })).not.toBeInTheDocument();
     });
   });
 });
@@ -551,12 +587,30 @@ describe('SidebarLayout', () => {
   });
 
   it('highlights New Chat, New Agent, and Settings when selected', async () => {
+    function NamedAgentButtons() {
+      const shell = useShellMode();
+      return (
+        <>
+          <button type="button" onClick={() => shell.selectLibraryAgent({ isMutable: false, agentName: 'support' })}>
+            Open history
+          </button>
+          <button
+            type="button"
+            onClick={() => shell.selectLibraryAgent({ isMutable: false, agentId: 'support-id', agentName: 'support' })}
+          >
+            Try support
+          </button>
+        </>
+      );
+    }
+
     render(
       <SlotsProvider theme={{ brand: { mode: 'icon-title', name: 'Acme' } }}>
         <ServerProvider server={mockServer(stubCatalog)}>
           <ShellModeProvider>
             <AgentConfigInstructionsProvider>
               <RuntimeHarness messages={[]}>
+                <NamedAgentButtons />
                 <div className="h-96">
                   <SidebarLayout />
                 </div>
@@ -570,6 +624,14 @@ describe('SidebarLayout', () => {
     const newChat = screen.getByRole('button', { name: 'Start new chat' });
     const newAgent = screen.getByRole('button', { name: 'Start new agent' });
     expect(newChat).toHaveAttribute('aria-current', 'page');
+    expect(newAgent).not.toHaveAttribute('aria-current');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open history' }));
+    expect(newChat).toHaveAttribute('aria-current', 'page');
+    expect(newAgent).not.toHaveAttribute('aria-current');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try support' }));
+    expect(newChat).not.toHaveAttribute('aria-current');
     expect(newAgent).not.toHaveAttribute('aria-current');
 
     fireEvent.click(newAgent);
@@ -716,6 +778,10 @@ describe('layout slot overrides', () => {
     return <button type="button">custom clear</button>;
   }
 
+  function CustomShareChat() {
+    return <button type="button">custom share</button>;
+  }
+
   function CustomSaveAgent() {
     return <button type="button">custom save</button>;
   }
@@ -745,12 +811,17 @@ describe('layout slot overrides', () => {
     );
 
     expect(screen.getByRole('button', { name: 'custom clear' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Clear chat' })).not.toBeInTheDocument();
   });
 
-  it.each(hosts)('%s places Clear Chat immediately before Save Agent', (_name, Layout) => {
+  it.each(hosts)('%s places Share, New Chat, and Save Agent in order', (_name, Layout) => {
     render(
-      <SlotsProvider overrides={{ ClearChatButton: CustomClearChat, SaveAgentButton: CustomSaveAgent }}>
+      <SlotsProvider
+        overrides={{
+          ShareChatButton: CustomShareChat,
+          ClearChatButton: CustomClearChat,
+          SaveAgentButton: CustomSaveAgent,
+        }}
+      >
         <ShellModeProvider agentConfig={{ mode: 'SingleAgent', name: 'a' }}>
           <RuntimeHarness messages={[]}>
             <div className="h-96">
@@ -761,8 +832,10 @@ describe('layout slot overrides', () => {
       </SlotsProvider>,
     );
 
+    const shareChat = screen.getByRole('button', { name: 'custom share' });
     const clearChat = screen.getByRole('button', { name: 'custom clear' });
     const saveAgent = screen.getByRole('button', { name: 'custom save' });
+    expect(shareChat.nextElementSibling).toBe(clearChat);
     expect(clearChat.nextElementSibling).toBe(saveAgent);
   });
 

@@ -14,7 +14,7 @@ import { AgentDetailsTabs } from '../atoms/agent-details/AgentDetailsTabs.js';
 import { AgentDetailsUnavailable } from '../atoms/agent-details/AgentDetailsUnavailable.js';
 import { AgentMetricCard } from '../atoms/agent-details/AgentMetricCard.js';
 import { AgentMetricsTimeRangeFilter } from '../atoms/agent-details/AgentMetricsTimeRangeFilter.js';
-import { AgentMetricsView } from '../atoms/agent-details/AgentMetricsView.js';
+import { AgentMetricStatistics, AgentMetricsView } from '../atoms/agent-details/AgentMetricsView.js';
 import { AgentOverviewCard } from '../atoms/agent-details/AgentOverviewCard.js';
 import { AgentSessionDetailHeader } from '../atoms/agent-details/AgentSessionDetailHeader.js';
 import { AgentSessionListRow } from '../atoms/agent-details/AgentSessionListRow.js';
@@ -70,6 +70,7 @@ import { MessageIndicator } from '../atoms/MessageIndicator.js';
 import { MessageTimestamp } from '../atoms/MessageTimestamp.js';
 import { MonacoEditorCore } from '../atoms/MonacoEditorCore.js';
 import { OpenUiFenceBlock } from '../atoms/OpenUiFenceBlock.js';
+import { PermissionGuard } from '../atoms/PermissionGuard.js';
 import { SandboxArtifactDownload } from '../atoms/SandboxArtifactDownload.js';
 import { SandboxToolCallCard } from '../atoms/SandboxToolCallCard.js';
 import { SaveAgentButton } from '../atoms/SaveAgentButton.js';
@@ -79,6 +80,8 @@ import { SchedulesButton } from '../atoms/SchedulesButton.js';
 import { ScrollToBottomButton } from '../atoms/ScrollToBottomButton.js';
 import { SelectAgentEmptyState } from '../atoms/SelectAgentEmptyState.js';
 import { SessionsBrowserButton } from '../atoms/SessionsBrowserButton.js';
+import { ShareChatButton } from '../atoms/ShareChatButton.js';
+import { ShareSessionDialog } from '../atoms/ShareSessionDialog.js';
 import { ShellActionsActionSlot } from '../atoms/ShellActionsActionSlot.js';
 import { MessageListSkeleton } from '../atoms/Skeletons.js';
 import { SubAgentCard } from '../atoms/SubAgentCard.js';
@@ -96,6 +99,7 @@ import { ToolApprovalBar } from '../atoms/ToolApprovalBar.js';
 import { ToolCallCard } from '../atoms/ToolCallCard.js';
 import { ToolCallContentBlock } from '../atoms/ToolCallContentBlock.js';
 import { ToolGroupCard } from '../atoms/ToolGroupCard.js';
+import { UserAvatar } from '../atoms/UserAvatar.js';
 import { UserMessageActionBar } from '../atoms/UserMessageActionBar.js';
 import { UserMessageBubble } from '../atoms/UserMessageBubble.js';
 import { UserMessageEdit } from '../atoms/UserMessageEdit.js';
@@ -148,6 +152,7 @@ export const defaultSlots = {
   ComposerLeftSection,
   ComposerRightSection,
   ComposerSendButton,
+  PermissionGuard,
   DraftComposerLeftSection,
   DraftComposerRightSection,
   DraftAgentConfigTrigger,
@@ -220,6 +225,7 @@ export const defaultSlots = {
   AgentMetricsView,
   AgentMetricsTimeRangeFilter,
   AgentMetricCard,
+  AgentMetricStatistics,
   AgentMetricChart,
   AgentSessionDetailHeader,
   AgentSessionsFilters,
@@ -239,6 +245,8 @@ export const defaultSlots = {
   SaveAgentForm,
   SelectAgentEmptyState,
   ClearChatButton,
+  ShareChatButton,
+  ShareSessionDialog,
   ThreadListRowSkeleton,
   ThreadListEmptyState,
   ThreadListShell,
@@ -251,4 +259,5 @@ export const defaultSlots = {
   Toast,
   ToastStack,
   ShellActionsActionSlot,
+  UserAvatar,
 } satisfies AtomSlots;

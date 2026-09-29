@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { describe, it, vi } from 'vitest';
 
 import { createHarnessAgentSessionsServer } from '@/plugins/trueforge-agent-server-adapter/agentSessionsServer.js';
+import { resolveTrueForgeBaseUrl } from '@/plugins/trueforge-agent-server-adapter/client.js';
 
 describe('createHarnessAgentSessionsServer', () => {
   it('maps agent details and code snippets to the UI contract', async () => {
@@ -10,6 +11,7 @@ describe('createHarnessAgentSessionsServer', () => {
       data: {
         id: 'agent-1',
         name: 'writer',
+        description: 'Writes docs.',
         manifest: { model: { name: 'openai/gpt-5' }, instructions: 'Write.' },
       },
     }));
@@ -36,7 +38,11 @@ describe('createHarnessAgentSessionsServer', () => {
     assert.deepEqual(await server.getAgent({ agentId: 'agent-1' }), {
       agentId: 'agent-1',
       name: 'writer',
-      agentSpec: { model: { name: 'openai/gpt-5' }, instructions: 'Write.' },
+      description: 'Writes docs.',
+      agentSpec: {
+        model: { name: 'openai/gpt-5' },
+        instructions: 'Write.',
+      },
     });
     assert.deepEqual(await server.getCodeSnippets({ agentId: 'agent-1' }), [
       {
@@ -47,7 +53,10 @@ describe('createHarnessAgentSessionsServer', () => {
       },
     ]);
     assert.deepEqual(get.mock.calls[0], ['agent-1']);
-    assert.deepEqual(getCodeSnippets.mock.calls[0], ['agent-1']);
+    assert.deepEqual(getCodeSnippets.mock.calls[0], [
+      'agent-1',
+      { baseUrl: resolveTrueForgeBaseUrl('/').replace(/\/$/, '') },
+    ]);
   });
 
   it('maps listSessions and listSessionEvents onto the UI contract', async () => {

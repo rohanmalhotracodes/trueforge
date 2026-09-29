@@ -177,6 +177,69 @@ describe('ShellModeProvider', () => {
     expect(result.current.agentConfigOpen).toBe(false);
   });
 
+  it('resumes the active agent builder without resetting its runtime', () => {
+    const { result } = renderHook(() => useShellMode(), { wrapper: wrap() });
+
+    act(() => result.current.openAgentBuilder());
+    const builderRuntimeKey = result.current.runtimeKey;
+
+    act(() => result.current.setLibraryOpen(true));
+    expect(result.current.libraryOpen).toBe(true);
+    expect(result.current.agentConfigOpen).toBe(false);
+
+    act(() => result.current.openAgentBuilder());
+    expect(result.current.libraryOpen).toBe(false);
+    expect(result.current.agentConfigOpen).toBe(true);
+    expect(result.current.runtimeKey).toBe(builderRuntimeKey);
+  });
+
+  it('starts a fresh agent builder after leaving a saved builder', () => {
+    const { result } = renderHook(() => useShellMode(), { wrapper: wrap() });
+
+    act(() => result.current.openAgentBuilder());
+    act(() =>
+      result.current.bindMutableAgent({
+        agentId: 'saved',
+        agentName: 'saved',
+        agentSpec: { model: { name: 'saved/model' } },
+      }),
+    );
+    expect(result.current.mode).toMatchObject({ agentId: 'saved', agentName: 'saved' });
+
+    act(() => result.current.setLibraryOpen(true));
+    act(() => result.current.openAgentBuilder());
+
+    expect(result.current.mode).toMatchObject({
+      status: 'active',
+      isMutable: true,
+      isCreateAgent: true,
+    });
+    if (result.current.mode.status !== 'active') throw new Error('expected active mode');
+    expect(result.current.mode.agentId).toBeUndefined();
+    expect(result.current.mode.agentName).toBeUndefined();
+  });
+
+  it('restores the active agent draft after visiting New Chat', () => {
+    const { result } = renderHook(() => useShellMode(), { wrapper: wrap() });
+    const agentDraft = {
+      model: { name: 'chosen/model' },
+      instructions: 'Keep these instructions.',
+    };
+
+    act(() => result.current.openAgentBuilder());
+    act(() => result.current.rememberDraftSpec(agentDraft, 'agent'));
+    act(() => result.current.openDraft());
+    act(() => result.current.openAgentBuilder());
+
+    expect(result.current.mode).toMatchObject({
+      status: 'active',
+      isMutable: true,
+      isCreateAgent: true,
+      agentSpec: agentDraft,
+    });
+    expect(readDraftSpecPreferences('agent')).not.toHaveProperty('instructions');
+  });
+
   it('openDraft starts New Chat without agent config; openAgentBuilder opens config', () => {
     const { result } = renderHook(() => useShellMode(), { wrapper: wrap() });
 
@@ -443,11 +506,53 @@ describe('ShellModeProvider', () => {
     expect(result.current.listSessionsAgentId).toBeUndefined();
     expect(result.current.historyAgentFilter).toBeNull();
 
-    act(() => result.current.setHistoryAgentFilter('from-sdk'));
-    expect(result.current.historyAgentFilter).toBe('from-sdk');
+    act(() =>
+      result.current.setHistoryAgentFilter({
+        agentId: 'from-sdk',
+        agentName: 'From SDK',
+        intent: 'history',
+      }),
+    );
+    expect(result.current.historyAgentFilter).toEqual({
+      agentId: 'from-sdk',
+      agentName: 'From SDK',
+      intent: 'history',
+    });
     expect(result.current.listSessionsAgentId).toBe('from-sdk');
 
     act(() => result.current.setHistoryAgentFilter(null));
+    expect(result.current.listSessionsAgentId).toBeUndefined();
+  });
+
+  it('filters history to an immutable agent selected from the library', () => {
+    const { result } = renderHook(() => useShellMode(), {
+      wrapper: wrap({ mode: 'AgentLibraryWithComposer' }),
+    });
+
+    act(() =>
+      result.current.selectLibraryAgent({
+        isMutable: false,
+        agentId: 'agent-id',
+        agentName: 'Agent Name',
+      }),
+    );
+
+    expect(result.current.historyAgentFilter).toEqual({
+      agentId: 'agent-id',
+      agentName: 'Agent Name',
+      intent: 'try-agent',
+    });
+    expect(result.current.listSessionsAgentId).toBe('agent-id');
+  });
+
+  it('does not use an agent name as the history agent id', () => {
+    const { result } = renderHook(() => useShellMode(), {
+      wrapper: wrap({ mode: 'AgentLibraryWithComposer' }),
+    });
+
+    act(() => result.current.selectLibraryAgent({ isMutable: false, agentName: 'Agent Name' }));
+
+    expect(result.current.historyAgentFilter).toBeNull();
     expect(result.current.listSessionsAgentId).toBeUndefined();
   });
 
@@ -456,7 +561,13 @@ describe('ShellModeProvider', () => {
       wrapper: wrap({ mode: 'SingleAgent', name: 'locked' }),
     });
     expect(result.current.listSessionsAgentId).toBe('locked');
-    act(() => result.current.setHistoryAgentFilter('ignored'));
+    act(() =>
+      result.current.setHistoryAgentFilter({
+        agentId: 'ignored',
+        agentName: 'Ignored',
+        intent: 'history',
+      }),
+    );
     expect(result.current.listSessionsAgentId).toBe('locked');
   });
 

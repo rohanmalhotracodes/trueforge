@@ -1,6 +1,6 @@
 'use client';
 
-import { useTrueFoundryAgentSpec, useTrueFoundryUpdateAgentSpec } from '@truefoundry/assistant-ui-runtime';
+import { useTrueForgeAgentSpec, useTrueForgeUpdateAgentSpec } from '@truefoundry/trueforge-assistant-ui-runtime';
 import { useEffect, useId, useRef, useState } from 'react';
 
 import { Icon } from '../../icons/Icon.js';
@@ -19,8 +19,8 @@ export type DraftReasoningEffortSelectorProps = {
 
 export function DraftReasoningEffortSelector({ disabled, isRunning }: DraftReasoningEffortSelectorProps) {
   const { models, ensureLoaded } = useDraftCatalog();
-  const { agentSpec } = useTrueFoundryAgentSpec();
-  const updateAgentSpec = useTrueFoundryUpdateAgentSpec();
+  const { agentSpec } = useTrueForgeAgentSpec();
+  const updateAgentSpec = useTrueForgeUpdateAgentSpec();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const clearedStickyEffortForModelRef = useRef<string | null>(null);
@@ -142,7 +142,7 @@ export function DraftReasoningEffortSelector({ disabled, isRunning }: DraftReaso
             {content}
           </BottomSheet>
         ) : (
-          <div className="bg-card-bg text-text-primary absolute right-0 bottom-full z-50 mb-2 flex max-h-[22rem] w-[12rem] flex-col overflow-hidden rounded-lg border border-border shadow-lg">
+          <div className="aui-popup-enter bg-card-bg text-text-primary absolute right-0 bottom-full z-50 mb-2 flex max-h-[22rem] w-[12rem] flex-col overflow-hidden rounded-lg border border-border shadow-lg">
             {content}
           </div>
         )

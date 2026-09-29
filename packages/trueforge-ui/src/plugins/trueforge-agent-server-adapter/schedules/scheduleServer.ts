@@ -13,6 +13,7 @@ import type {
   ScheduleStatus,
   UpdateScheduleRequest,
 } from '../../../server/types.js';
+import { drainAgentsList } from '../agentsList.js';
 import { toListResult } from '../chatServer.js';
 
 /** Matches API PAGE_LIMIT for schedules list. */
@@ -24,10 +25,10 @@ type AgentIndex = {
 };
 
 async function loadAgentIndex(client: TrueForge): Promise<AgentIndex> {
-  const { data } = await client.agents.list();
+  const agents = await drainAgentsList(client);
   const idToName = new Map<string, string>();
   const nameToId = new Map<string, string>();
-  for (const agent of data) {
+  for (const agent of agents) {
     idToName.set(agent.id, agent.name);
     nameToId.set(agent.name, agent.id);
   }
@@ -68,6 +69,7 @@ function toUiSchedule(wire: TrueForgeApi.Schedule, index: AgentIndex): Schedule 
     timezone: wire.manifest.timezone ?? 'UTC',
     status: wireStatus(wire.manifest),
     lastRunAt: null,
+    createdBySubject: wire.createdBySubject,
   };
 }
 
@@ -97,6 +99,7 @@ function toUiScheduleRun(wire: TrueForgeApi.ScheduleRun): ScheduleRun {
     name: wire.name,
     scheduledFor: toIsoInstant(wire.scheduledFor),
     status: wire.status,
+    reason: wire.reason,
     triggeredAt: wire.triggeredAt == null ? null : toIsoInstant(wire.triggeredAt),
     triggeredBy: wire.createdBySubject.subjectDisplayName || wire.createdBySubject.subjectId,
   };

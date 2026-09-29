@@ -1,14 +1,21 @@
-import { CreatedBySubjectSchema } from '@truefoundry/trueforge-core/agent-session';
-import type { Kysely, Selectable, Transaction } from 'kysely';
+import { CreatedBySubjectSchema, type TokenPagination } from '@truefoundry/trueforge-core/agent-session';
+import {
+  decodeOffsetPageToken,
+  paginateOffsetRows,
+} from '@truefoundry/trueforge-core/agent-session/store/OffsetPageToken';
+import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { newId } from '../../../utils/id';
 import {
   AgentExternalIdConflictError,
   AgentNameConflictError,
   parseStoredAgentSpec,
+  type AgentExternalIdRow,
   type AgentRecord,
   type CreateAgentInput,
   type DeleteAgentInput,
   type GetAgentInput,
+  type GetExternalIdsByIdsInput,
+  type GetOwnedIdsInput,
   type IAgentStore,
   type ListAgentsInput,
   type UpdateAgentInput,
@@ -23,6 +30,7 @@ function toRecord(row: Selectable<AgentTable>): AgentRecord {
     id: row.id,
     tenant_id: row.tenant_id,
     name: row.name,
+    description: row.description,
     manifest: parseStoredAgentSpec(row.manifest),
     external_id: row.external_id,
     created_by_subject: CreatedBySubjectSchema.parse(row.created_by_subject),
@@ -56,17 +64,67 @@ export class PostgresAgentStore implements IAgentStore<Transaction<Database>> {
     this.#db = db;
   }
 
-  async listAgents(input: ListAgentsInput, transaction?: Transaction<Database>): Promise<AgentRecord[]> {
+  async listAgents(
+    input: ListAgentsInput,
+    transaction?: Transaction<Database>,
+  ): Promise<{ data: AgentRecord[]; pagination: TokenPagination }> {
     if (input.external_ids?.length === 0) {
-      return [];
+      return { data: [], pagination: { limit: input.limit ?? 0 } };
     }
     const db = transaction ?? this.#db;
     let query = db.selectFrom('agent').selectAll().where('tenant_id', '=', input.tenant_id);
     if (input.external_ids !== undefined) {
       query = query.where('external_id', 'in', [...input.external_ids]);
     }
-    const rows = await query.orderBy('name').execute();
-    return rows.map(toRecord);
+    if (input.agent_name !== undefined) {
+      query = query.where(sql<boolean>`position(lower(${input.agent_name}) in lower(name)) > 0`);
+    }
+    query = query.orderBy('name');
+    if (input.limit === undefined) {
+      const rows = await query.execute();
+      const data = rows.map(toRecord);
+      return { data, pagination: { limit: data.length } };
+    }
+    const offset = decodeOffsetPageToken(input.page_token);
+    const rows = await query
+      .limit(input.limit + 1)
+      .offset(offset)
+      .execute();
+    const { data, pagination } = paginateOffsetRows(rows, input.limit, offset);
+    return { data: data.map(toRecord), pagination };
+  }
+
+  async getOwnedIds(input: GetOwnedIdsInput, transaction?: Transaction<Database>): Promise<readonly string[]> {
+    if (input.ids.length === 0) {
+      return [];
+    }
+    const db = transaction ?? this.#db;
+    const rows = await db
+      .selectFrom('agent')
+      .select('id')
+      .where('tenant_id', '=', input.tenant_id)
+      .where('id', 'in', [...input.ids])
+      .where(sql`created_by_subject->>'subject_id'`, '=', input.subject_id)
+      .execute();
+    return rows.map(row => row.id);
+  }
+
+  async getExternalIdsByIds(
+    input: GetExternalIdsByIdsInput,
+    transaction?: Transaction<Database>,
+  ): Promise<readonly AgentExternalIdRow[]> {
+    if (input.ids.length === 0) {
+      return [];
+    }
+    const db = transaction ?? this.#db;
+    const rows = await db
+      .selectFrom('agent')
+      .select(['id', 'external_id'])
+      .where('tenant_id', '=', input.tenant_id)
+      .where('id', 'in', [...input.ids])
+      .where('external_id', 'is not', null)
+      .execute();
+    return rows.flatMap(row => (row.external_id ? [{ id: row.id, external_id: row.external_id }] : []));
   }
 
   async getAgent(input: GetAgentInput, transaction?: Transaction<Database>): Promise<AgentRecord | undefined> {
@@ -90,6 +148,7 @@ export class PostgresAgentStore implements IAgentStore<Transaction<Database>> {
           id: newId(),
           tenant_id: input.tenant_id,
           name: input.name,
+          description: input.description,
           manifest: json(input.manifest),
           external_id: input.external_id,
           created_by_subject: json(input.created_by_subject),
@@ -113,8 +172,8 @@ export class PostgresAgentStore implements IAgentStore<Transaction<Database>> {
   }
 
   async updateAgent(input: UpdateAgentInput, transaction?: Transaction<Database>): Promise<AgentRecord | undefined> {
-    if (input.manifest === undefined && input.external_id === undefined) {
-      throw new Error('updateAgent requires manifest and/or external_id');
+    if (input.manifest === undefined && input.description === undefined && input.external_id === undefined) {
+      throw new Error('updateAgent requires manifest, description, and/or external_id');
     }
     const db = transaction ?? this.#db;
     try {
@@ -122,6 +181,7 @@ export class PostgresAgentStore implements IAgentStore<Transaction<Database>> {
         .updateTable('agent')
         .set({
           ...(input.manifest === undefined ? {} : { manifest: json(input.manifest) }),
+          ...(input.description === undefined ? {} : { description: input.description }),
           ...(input.external_id === undefined ? {} : { external_id: input.external_id }),
           updated_at: now(),
         })

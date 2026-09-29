@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { act, render, waitFor } from '@testing-library/react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { StrictMode, useEffect, useState, type ReactNode } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { resolveRoutesConfig } from '@/routing/paths.js';
 import { ShellRouteSync } from '@/routing/ShellRouteSync.js';
@@ -47,6 +47,7 @@ function SettingsCatalogProvider({
   includeCatalog = true,
   includeSessions = true,
   includeSchedules = false,
+  getSession,
 }: {
   children: ReactNode;
   settingsEnabled?: boolean;
@@ -54,6 +55,14 @@ function SettingsCatalogProvider({
   includeCatalog?: boolean;
   includeSessions?: boolean;
   includeSchedules?: boolean;
+  getSession?: (req: { sessionId: string }) => Promise<{
+    id: string;
+    title: string;
+    isMutable: boolean;
+    createdAt: string;
+    updatedAt: string;
+    agentName?: string;
+  }>;
 }) {
   const server = createMockAgentUIServer({
     ...(includeCatalog ? { catalog: createMockCatalog() } : {}),
@@ -69,13 +78,17 @@ function SettingsCatalogProvider({
         },
       };
     },
-    getSession: async ({ sessionId }) => ({
-      id: sessionId,
-      title: 'Session',
-      isMutable: true,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    }),
+    getSession:
+      getSession ??
+      (async ({ sessionId }) => ({
+        id: sessionId,
+        title: 'Session',
+        isMutable: true,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      })),
+    // findAgentByName walks unfiltered pages and matches by exact name client-side.
+    searchAgents: async () => ({ data: [{ name: 'helper', agentId: 'helper-id' }] }),
   });
   return <ServerProvider server={server}>{children}</ServerProvider>;
 }
@@ -89,6 +102,8 @@ function Harness({
   includeCatalog = true,
   includeSessions = true,
   includeSchedules = false,
+  getSession,
+  onError,
 }: {
   agentConfig?: AgentConfig;
   initialRemoteId?: string;
@@ -98,6 +113,15 @@ function Harness({
   includeCatalog?: boolean;
   includeSessions?: boolean;
   includeSchedules?: boolean;
+  getSession?: (req: { sessionId: string }) => Promise<{
+    id: string;
+    title: string;
+    isMutable: boolean;
+    createdAt: string;
+    updatedAt: string;
+    agentName?: string;
+  }>;
+  onError?: (error: unknown) => void;
 }) {
   const [remoteId, setId] = useState<string | undefined>(initialRemoteId);
   setRemoteId = setId;
@@ -108,11 +132,17 @@ function Harness({
       includeCatalog={includeCatalog}
       includeSessions={includeSessions}
       includeSchedules={includeSchedules}
+      getSession={getSession}
     >
       <ShellModeProvider agentConfig={agentConfig} initialSettingsOpen={initialSettingsOpen}>
         <CaptureShell />
         <CaptureLocation />
-        <ShellRouteSync routes={routes} activeRemoteId={remoteId} initialSettingsOpen={initialSettingsOpen} />
+        <ShellRouteSync
+          routes={routes}
+          activeRemoteId={remoteId}
+          initialSettingsOpen={initialSettingsOpen}
+          onError={onError}
+        />
       </ShellModeProvider>
     </SettingsCatalogProvider>
   );
@@ -127,8 +157,18 @@ function renderSync(opts: {
   includeCatalog?: boolean;
   includeSessions?: boolean;
   includeSchedules?: boolean;
+  getSession?: (req: { sessionId: string }) => Promise<{
+    id: string;
+    title: string;
+    isMutable: boolean;
+    createdAt: string;
+    updatedAt: string;
+    agentName?: string;
+  }>;
+  onError?: (error: unknown) => void;
+  strict?: boolean;
 }) {
-  return render(
+  const tree = (
     <MemoryRouter initialEntries={opts.initialEntries ?? ['/']}>
       <Harness
         agentConfig={opts.agentConfig}
@@ -138,9 +178,12 @@ function renderSync(opts: {
         includeCatalog={opts.includeCatalog}
         includeSessions={opts.includeSessions}
         includeSchedules={opts.includeSchedules}
+        getSession={opts.getSession}
+        onError={opts.onError}
       />
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  return render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
 describe('ShellRouteSync', () => {
@@ -150,16 +193,174 @@ describe('ShellRouteSync', () => {
     expect(pathname).toBe('/sessions/abc');
   });
 
-  it('applies an agent deep link on boot', () => {
-    renderSync({ initialEntries: ['/agents/helper'], agentConfig: { mode: 'AgentLibrary' } });
+  it('toasts and redirects to New Chat when a session deep link is forbidden', async () => {
+    const onError = vi.fn();
+    const forbidden = Object.assign(new Error('Only the session creator can access this session'), {
+      statusCode: 403,
+    });
+    renderSync({
+      initialEntries: ['/sessions/forbidden'],
+      getSession: async () => {
+        throw forbidden;
+      },
+      onError,
+    });
+
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalledOnce();
+    });
+    expect(onError).toHaveBeenCalledWith(forbidden);
+    await waitFor(() => {
+      expect(pathname).toBe('/');
+    });
+    expect(shell.pendingSessionId).toBeUndefined();
+  });
+
+  it('toasts and redirects to New Chat when a session deep link is not found', async () => {
+    const onError = vi.fn();
+    const notFound = Object.assign(new Error('Session not found: missing'), { statusCode: 404 });
+    renderSync({
+      initialEntries: ['/sessions/missing'],
+      getSession: async () => {
+        throw notFound;
+      },
+      onError,
+    });
+
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalledOnce();
+    });
+    expect(onError).toHaveBeenCalledWith(notFound);
+    await waitFor(() => {
+      expect(pathname).toBe('/');
+    });
+    expect(shell.pendingSessionId).toBeUndefined();
+  });
+
+  it('applies an agent deep link on boot and resolves its history filter id', async () => {
+    renderSync({ initialEntries: ['/agents/helper'], agentConfig: { mode: 'AgentLibrary' }, strict: true });
     expect(shell.mode).toMatchObject({ status: 'active', isMutable: false, agentName: 'helper' });
+    await waitFor(() => expect(shell.listSessionsAgentId).toBe('helper-id'));
+    expect(pathname).toBe('/agents/helper');
+    expect(search).toBe('?try_agent_name=helper');
+    expect(shell.historyAgentFilter?.intent).toBe('try-agent');
+  });
+
+  it('restores a filtered history session from its agent-name query', async () => {
+    renderSync({
+      initialEntries: ['/sessions/abc?history_agent_name=helper'],
+      agentConfig: { mode: 'AgentLibraryWithComposer' },
+    });
+
+    await waitFor(() => expect(shell.pendingSessionId).toBe('abc'));
+    await waitFor(() => expect(shell.listSessionsAgentId).toBe('helper-id'));
+    expect(shell.historyAgentFilter).toEqual({
+      agentId: 'helper-id',
+      agentName: 'helper',
+      intent: 'history',
+    });
+    expect(search).toBe('?history_agent_name=helper');
+  });
+
+  it('clears a restored filter when no exact agent name exists', async () => {
+    renderSync({
+      initialEntries: ['/sessions/abc?history_agent_name=missing'],
+      agentConfig: { mode: 'AgentLibraryWithComposer' },
+    });
+
+    await waitFor(() => expect(shell.pendingSessionId).toBe('abc'));
+    await waitFor(() => expect(shell.historyAgentFilter).toBeNull());
+    await waitFor(() => expect(search).toBe(''));
+    expect(shell.listSessionsAgentId).toBeUndefined();
   });
 
   it('pushes the URL when the shell selects an immutable agent', () => {
     renderSync({ initialEntries: ['/'], agentConfig: { mode: 'AgentLibrary' } });
     expect(pathname).toBe('/');
-    act(() => shell.selectLibraryAgent({ isMutable: false, agentName: 'foo' }));
+    act(() => shell.selectLibraryAgent({ isMutable: false, agentId: 'foo-id', agentName: 'foo' }));
     expect(pathname).toBe('/agents/foo');
+    expect(search).toBe('?try_agent_name=foo');
+  });
+
+  it('preserves Try Agent intent when its new chat acquires a session id', async () => {
+    renderSync({ initialEntries: ['/agents/helper'], agentConfig: { mode: 'AgentLibraryWithComposer' } });
+    await waitFor(() => expect(shell.listSessionsAgentId).toBe('helper-id'));
+
+    act(() => setRemoteId('session-from-try'));
+
+    expect(pathname).toBe('/sessions/session-from-try');
+    expect(search).toBe('?try_agent_name=helper');
+  });
+
+  it('clears Try Agent URL and history filter when New Chat opens', async () => {
+    renderSync({ initialEntries: ['/agents/helper'], agentConfig: { mode: 'AgentLibraryWithComposer' } });
+    await waitFor(() => expect(shell.listSessionsAgentId).toBe('helper-id'));
+
+    act(() => shell.openDraft());
+
+    expect(pathname).toBe('/');
+    expect(search).toBe('');
+    expect(shell.historyAgentFilter).toBeNull();
+    expect(shell.listSessionsAgentId).toBeUndefined();
+  });
+
+  it('writes and clears a manual history filter without changing the chat place', () => {
+    renderSync({ initialEntries: ['/'], agentConfig: { mode: 'AgentLibraryWithComposer' } });
+
+    act(() =>
+      shell.setHistoryAgentFilter({
+        agentId: 'helper-id',
+        agentName: 'helper',
+        intent: 'history',
+      }),
+    );
+    expect(pathname).toBe('/');
+    expect(search).toBe('?history_agent_name=helper');
+
+    act(() => shell.setHistoryAgentFilter(null));
+    expect(pathname).toBe('/');
+    expect(search).toBe('');
+  });
+
+  it('clears history filter query state when leaving chat routes', () => {
+    renderSync({ initialEntries: ['/'], agentConfig: { mode: 'AgentLibraryWithComposer' } });
+
+    act(() =>
+      shell.setHistoryAgentFilter({
+        agentId: 'helper-id',
+        agentName: 'helper',
+        intent: 'history',
+      }),
+    );
+    expect(search).toBe('?history_agent_name=helper');
+
+    act(() => shell.openAgentBuilder());
+    expect(pathname).toBe('/build-agent');
+    expect(search).toBe('');
+    expect(shell.historyAgentFilter).toBeNull();
+
+    act(() =>
+      shell.setHistoryAgentFilter({
+        agentId: 'helper-id',
+        agentName: 'helper',
+        intent: 'history',
+      }),
+    );
+    act(() => shell.setLibraryOpen(true));
+    expect(pathname).toBe('/library');
+    expect(search).toBe('');
+    expect(shell.historyAgentFilter).toBeNull();
+  });
+
+  it('applies and mirrors the build-agent route', () => {
+    renderSync({ initialEntries: ['/build-agent'] });
+    expect(shell.mode).toMatchObject({ status: 'active', isMutable: true, isCreateAgent: true });
+    expect(pathname).toBe('/build-agent');
+
+    act(() => shell.openDraft());
+    expect(pathname).toBe('/');
+    act(() => shell.openAgentBuilder());
+    expect(pathname).toBe('/build-agent');
   });
 
   it('mirrors settings open/close through history', async () => {

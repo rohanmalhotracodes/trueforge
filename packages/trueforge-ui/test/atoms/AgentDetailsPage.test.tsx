@@ -6,11 +6,12 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AgentDetailsPage } from '@/atoms/agent-details/AgentDetailsPage.js';
 import { AgentSessions } from '@/atoms/agent-details/AgentSessions.js';
 import { ServerProvider } from '@/server/ServerContext.js';
-import { ShellModeProvider } from '@/server/ShellModeContext.js';
+import { ShellModeProvider, useShellMode } from '@/server/ShellModeContext.js';
 import type {
   AgentDetail,
   AgentMetricsServer,
   CodeSnippet,
+  ListPermissionsResponse,
   ScheduleServer,
   Session,
   SessionEventItem,
@@ -19,7 +20,53 @@ import type {
 import { SlotsProvider, type SlotOverrides } from '@/theme/SlotsProvider.js';
 import { createMockAgentUIServer, createMockScheduleServer } from '../server/mockServer.js';
 
+const intersectionObservers: IntersectionObserverMock[] = [];
+
+class IntersectionObserverMock implements IntersectionObserver {
+  readonly root = null;
+  readonly rootMargin = '';
+  readonly thresholds: readonly number[] = [];
+  active = false;
+
+  constructor(readonly callback: IntersectionObserverCallback) {
+    intersectionObservers.push(this);
+  }
+
+  observe(): void {
+    this.active = true;
+  }
+  unobserve(): void {
+    this.active = false;
+  }
+  disconnect(): void {
+    this.active = false;
+  }
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+}
+
+/** Report every live sentinel as visible, as scrolling the list to the bottom would. */
+function scrollListToBottom() {
+  const rect = new DOMRect(0, 0, 320, 64);
+  const entry: IntersectionObserverEntry = {
+    boundingClientRect: rect,
+    intersectionRatio: 1,
+    intersectionRect: rect,
+    isIntersecting: true,
+    rootBounds: null,
+    target: document.createElement('div'),
+    time: 0,
+  };
+  act(() => {
+    for (const observer of intersectionObservers) {
+      if (observer.active) observer.callback([entry], observer);
+    }
+  });
+}
+
 beforeAll(() => {
+  vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
   HTMLDialogElement.prototype.showModal = function showModal() {
     this.setAttribute('open', '');
   };
@@ -32,6 +79,7 @@ beforeAll(() => {
 const detail: AgentDetail = {
   agentId: 'agent-1',
   name: 'release-notes-writer',
+  description: 'Produces concise release notes from merged PRs.',
   agentSpec: {
     model: { name: 'openai/gpt-5.1', params: { maxTokens: 16000 } },
     instructions: '# Who you are\n\nWrite concise release notes.',
@@ -59,6 +107,17 @@ const sessionRows: SessionListEntry[] = [
     agentName: 'release-notes-writer',
   },
 ];
+
+function ShellModeProbe() {
+  const shell = useShellMode();
+  return (
+    <output data-testid="shell-mode">
+      {shell.mode.status === 'active'
+        ? `${shell.mode.agentId ?? ''}:${String(shell.mode.isMutable)}`
+        : shell.mode.status}
+    </output>
+  );
+}
 
 function deferred<T>() {
   let settle: ((value: T) => void) | undefined;
@@ -116,6 +175,7 @@ function renderPage({
         <ServerProvider server={server}>
           <ShellModeProvider>
             <AgentDetailsPage agentId="agent-1" />
+            <ShellModeProbe />
           </ShellModeProvider>
         </ServerProvider>
       </SlotsProvider>
@@ -127,12 +187,14 @@ function renderPage({
 describe('AgentDetailsPage', () => {
   afterEach(() => {
     window.history.replaceState(null, '', '/');
+    intersectionObservers.length = 0;
   });
 
   it('loads Overview and renders agent details', async () => {
     const { getAgent } = renderPage();
 
     expect(await screen.findByText('release-notes-writer')).toBeInTheDocument();
+    expect(await screen.findByText('Produces concise release notes from merged PRs.')).toBeInTheDocument();
     expect(await screen.findByText('Write concise release notes.')).toBeInTheDocument();
     expect(await screen.findByText('github')).toBeInTheDocument();
     expect(await screen.findByText('release-writing')).toBeInTheDocument();
@@ -152,11 +214,39 @@ describe('AgentDetailsPage', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
 
     expect(screen.getByRole('dialog', { name: 'Delete agent' })).toBeInTheDocument();
+    expect(screen.getByText(/including any schedules for this agent/)).toBeInTheDocument();
+    expect(deleteAgent).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Delete agent' })).not.toBeInTheDocument();
+    expect(deleteAgent).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for release-notes-writer' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => {
       expect(deleteAgent).toHaveBeenCalledWith({ agentName: 'release-notes-writer' });
     });
+  });
+
+  it('allows Try with USE while keeping Edit disabled without MANAGE', async () => {
+    renderPage({
+      serverOverrides: {
+        permissions: {
+          listPermissions: vi.fn(async (): Promise<ListPermissionsResponse> => ({
+            data: { type: 'agent', permissions: { 'agent-1': ['USE'] } },
+          })),
+        },
+      },
+    });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Try agent' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Try agent' }));
+    expect(screen.getByTestId('shell-mode')).toHaveTextContent('agent-1:false');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for release-notes-writer' }));
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeDisabled();
   });
 
   it('renders tab bodies through SlotProvider overrides', async () => {
@@ -177,6 +267,53 @@ describe('AgentDetailsPage', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Metrics' }));
     expect(screen.getByText('Custom metrics')).toBeInTheDocument();
     expect(new URL(window.location.href).searchParams.get('tab')).toBe('metrics');
+  });
+
+  it('shows the metrics time range at the end of the active tab row and reloads metrics', async () => {
+    const getMeters = vi.fn(async () => []);
+    renderPage({
+      metrics: {
+        getCharts: vi.fn(async () => []),
+        getMeters,
+        getChartData: vi.fn(async () => ({ step: '3600', graphs: [] })),
+      },
+      overrides: {
+        AgentMetricsTimeRangeFilter: ({ onTimeRangeChange }) => (
+          <button
+            type="button"
+            onClick={() =>
+              onTimeRangeChange({
+                startTs: Date.parse('2026-08-20T00:00:00.000Z'),
+                endTs: Date.parse('2026-08-21T00:00:00.000Z'),
+              })
+            }
+          >
+            Set metrics range
+          </button>
+        ),
+      },
+    });
+
+    expect(screen.queryByRole('button', { name: 'Set metrics range' })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Metrics' }));
+
+    const filter = screen.getByRole('button', { name: 'Set metrics range' });
+    const tablist = screen.getByRole('tablist', { name: 'Agent details' });
+    expect(tablist).not.toContainElement(filter);
+    expect(tablist.parentElement).toContainElement(filter);
+    expect(filter.parentElement).toHaveClass('ml-auto');
+
+    fireEvent.click(filter);
+    await waitFor(() =>
+      expect(getMeters).toHaveBeenLastCalledWith({
+        agentId: 'agent-1',
+        startTimestamp: '2026-08-20T00:00:00.000Z',
+        endTimestamp: '2026-08-21T00:00:00.000Z',
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(screen.queryByRole('button', { name: 'Set metrics range' })).not.toBeInTheDocument();
   });
 
   it('honors tab=metrics when the metrics port is available', async () => {
@@ -313,6 +450,72 @@ describe('AgentDetailsPage', () => {
     expect(screen.queryByText('Release notes draft')).not.toBeInTheDocument();
   });
 
+  it('does not paginate with the previous filter page token', async () => {
+    const second = deferred<{ data: SessionListEntry[] }>();
+    const listSessions = vi.fn((request?: { agentId?: string; pageToken?: string }) =>
+      request?.agentId === 'agent-1'
+        ? Promise.resolve({ data: sessionRows, nextPageToken: 'agent-1-next' })
+        : second.promise,
+    );
+    const server = createMockAgentUIServer({
+      sessions: {
+        getAgent: vi.fn(async () => detail),
+        getCodeSnippets: vi.fn(async () => snippets),
+        listSessions,
+        listSessionEvents: vi.fn(async () => ({ data: [] })),
+      },
+    });
+    const ui = (agentId: string) => (
+      <SlotsProvider>
+        <ServerProvider server={server}>
+          <ShellModeProvider>
+            <AgentSessions agentId={agentId} />
+          </ShellModeProvider>
+        </ServerProvider>
+      </SlotsProvider>
+    );
+    const view = render(ui('agent-1'));
+    expect(await screen.findByText('Release notes draft')).toBeInTheDocument();
+
+    view.rerender(ui('agent-2'));
+    scrollListToBottom();
+
+    expect(listSessions).toHaveBeenCalledTimes(2);
+    expect(listSessions).not.toHaveBeenCalledWith(expect.objectContaining({ pageToken: 'agent-1-next' }));
+
+    await act(async () => {
+      second.resolve({ data: [] });
+    });
+  });
+
+  it('loads the next page when the list is scrolled to the bottom', async () => {
+    const nextPage = deferred<{ data: SessionListEntry[] }>();
+    const listSessions = vi.fn((request?: { pageToken?: string }) =>
+      request?.pageToken == null
+        ? Promise.resolve({ data: sessionRows, nextPageToken: 'next-page' })
+        : nextPage.promise,
+    );
+    renderPage({ listSessions });
+    await screen.findByText('release-notes-writer');
+    fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }));
+    expect(await screen.findByText('Release notes draft')).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading more sessions' })).not.toBeInTheDocument();
+
+    scrollListToBottom();
+
+    await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2));
+    expect(listSessions).toHaveBeenLastCalledWith(expect.objectContaining({ pageToken: 'next-page' }));
+    expect(screen.getByRole('status', { name: 'Loading more sessions' })).toBeInTheDocument();
+
+    await act(async () => {
+      nextPage.resolve({
+        data: sessionRows.map(row => ({ ...row, id: 'sess-2', title: 'Second page session' })),
+      });
+    });
+    expect(screen.getByText('Second page session')).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading more sessions' })).not.toBeInTheDocument();
+  });
+
   it('keeps loaded rows visible when loading another page fails', async () => {
     const listSessions = vi.fn(async (request?: { pageToken?: string }) => {
       if (request?.pageToken != null) throw new Error('network error');
@@ -323,11 +526,13 @@ describe('AgentDetailsPage', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }));
     expect(await screen.findByText('Release notes draft')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    scrollListToBottom();
     await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2));
     expect(screen.getByText('Release notes draft')).toBeInTheDocument();
     expect(screen.queryByText('Sessions could not be loaded.')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Load more' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading sessions' }));
+    await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(3));
   });
 
   it('opens the Sessions tab and selected session from the share URL', async () => {

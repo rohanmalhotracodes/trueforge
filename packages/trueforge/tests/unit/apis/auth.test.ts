@@ -8,7 +8,7 @@ import { createAuthMiddleware } from '../../../src/auth/middleware';
 import { disableOidcAuth, initOidc } from '../../../src/auth/oidc';
 import { OidcAuthenticator } from '../../../src/auth/oidcAuthenticator';
 import { StandaloneAuthenticator } from '../../../src/auth/standaloneAuthenticator';
-import configuration from '../../../src/config';
+import configuration, { getPublicUiBasePath, isTrueFoundryModeEnabled } from '../../../src/config';
 
 jest.mock('../../../src/config', () => {
   const actual = jest.requireActual<typeof import('../../../src/config')>('../../../src/config');
@@ -39,8 +39,9 @@ jest.mock('../../../src/config', () => {
     ...actual,
     __esModule: true,
     default: config,
-    getPublicBaseUrl: () => actual.getPublicBaseUrl(publicBase),
-    getPublicUiBasePath: () => actual.getPublicUiBasePath(publicBase),
+    getPublicBaseUrl: jest.fn(() => actual.getPublicBaseUrl(publicBase)),
+    getPublicUiBasePath: jest.fn(() => actual.getPublicUiBasePath(publicBase)),
+    isTrueFoundryModeEnabled: jest.fn(() => false),
   };
 });
 
@@ -111,6 +112,37 @@ describe('auth router (no identity provider configured)', () => {
         roles: STANDALONE_REQUEST_CONTEXT.roles,
       },
     });
+  });
+});
+
+describe('auth router (TrueFoundry mode)', () => {
+  beforeEach(() => {
+    disableOidcAuth();
+    jest.mocked(isTrueFoundryModeEnabled).mockReturnValue(true);
+    jest.mocked(getPublicUiBasePath).mockReturnValue('/trueforge/');
+  });
+
+  afterEach(() => {
+    jest.mocked(isTrueFoundryModeEnabled).mockReturnValue(false);
+    jest.mocked(getPublicUiBasePath).mockReturnValue('/');
+  });
+
+  it('GET /auth/login redirects to TrueFoundry /signin/external by default', async () => {
+    const router = createTestAuthRouter({ oidcClient: undefined });
+
+    const res = await router.request('/login', { redirect: 'manual' });
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/signin/external?redirectPath=%2Ftrueforge%2F');
+  });
+
+  it('GET /auth/login wraps return_to as platform redirectPath', async () => {
+    const router = createTestAuthRouter({ oidcClient: undefined });
+
+    const res = await router.request('/login?return_to=/trueforge/sessions/abc', { redirect: 'manual' });
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/signin/external?redirectPath=%2Ftrueforge%2Fsessions%2Fabc');
   });
 });
 
@@ -403,6 +435,40 @@ describe('auth router (auth enabled)', () => {
     );
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe('/');
+  });
+
+  it('GET /callback does not reflect the exchange error message into the redirect', async () => {
+    // openid-client throws with the token-endpoint response embedded in the message, which
+    // carries the issuer host and upstream error body. None of that may reach the browser's
+    // address bar, where it lands in history, screenshots and support tickets.
+    const router = createTestAuthRouter({ oidcClient });
+    const loginRes = await router.request('/login?return_to=/', { redirect: 'manual' });
+    const stateCookieRaw = cookieValue(setCookies(loginRes), STATE_COOKIE) ?? '';
+    const authorizationUrl = new URL(loginRes.headers.get('location') ?? '');
+    const state = authorizationUrl.searchParams.get('state') ?? '';
+
+    const fetchStub = globalThis.fetch;
+    const failingFetch: typeof fetch = async (input, init) => {
+      if (String(input) === `${ISSUER}/token` && init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({ error: 'invalid_grant', error_description: 'code expired at issuer.example.com' }),
+          { status: 400, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return fetchStub(input, init);
+    };
+    globalThis.fetch = failingFetch;
+
+    const res = await router.request(`/callback?code=invalid&state=${state}&iss=${encodeURIComponent(ISSUER)}`, {
+      redirect: 'manual',
+      headers: { Cookie: `${STATE_COOKIE}=${stateCookieRaw}` },
+    });
+
+    expect(res.status).toBe(302);
+    const location = res.headers.get('location') ?? '';
+    expect(location).toBe('/?error=login_failed');
+    expect(location).not.toContain(new URL(ISSUER).host);
+    expect(location).not.toContain('invalid_grant');
   });
 
   it('GET /callback keeps login_failed when exchange fails and the leftover cookie is blocked', async () => {

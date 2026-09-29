@@ -3,9 +3,9 @@
   "theme": "mint",
   "redirects": [
     { "source": "/api/turn-events", "destination": "/api/use-agent#turn-events-reference" },
-    { "source": "/create-agent/tool-approval", "destination": "/create-agent/overview#whats-in-an-agent" },
-    { "source": "/create-agent/ask-user-questions", "destination": "/create-agent/overview#whats-in-an-agent" },
-    { "source": "/create-agent/generative-ui", "destination": "/create-agent/overview#whats-in-an-agent" },
+    { "source": "/create-agent/tool-approval", "destination": "/create-agent/overview#tool-approval" },
+    { "source": "/create-agent/ask-user-questions", "destination": "/create-agent/overview#ask-clarifying-questions" },
+    { "source": "/create-agent/generative-ui", "destination": "/create-agent/overview#generative-ui" },
     { "source": "/create-agent/agent-spec", "destination": "/create-agent/overview#create-an-agent-via-the-api" }
   ],
   "name": "TrueForge",
@@ -51,6 +51,8 @@
               },
               "create-agent/overview",
               "agent-library",
+              "sessions",
+              "schedules",
               {
                 "group": "Harness Capabilities",
                 "pages": [
@@ -74,6 +76,10 @@
             "pages": [
               "chat-ui",
               "ui-sdk/get-started/quickstart",
+              {
+                "group": "Server setup",
+                "pages": ["ui-sdk/setup-custom-servers/server-contract", "ui-sdk/setup-custom-servers/custom-server"]
+              },
               {
                 "group": "Frontend Customisation",
                 "pages": [

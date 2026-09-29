@@ -4,7 +4,6 @@ import {
   SkillMounter,
   type AgentDefinition,
   type AgentTracing,
-  type GitSkill,
   type ModelParams,
   type RemoteMcpHeaders,
   type SandboxProvider,
@@ -19,10 +18,13 @@ import type { IMcpServerStore, IMcpServerWithAuthStore } from '../db/mcpServerSt
 import type { IModelProviderStore } from '../db/modelProviderStore';
 import type { ISandboxProviderStore } from '../db/sandboxProviderStore';
 import type { ISkillStore } from '../db/skillStore';
+import type { TurnMetadata } from '../db/turnMetadata';
+import type { IWebSearchProviderStore } from '../db/webSearchProviderStore';
 import { LocalSandboxProvider } from '../sandbox/local/provider/LocalSandboxProvider';
 import { getCachedLocalSandboxSupport, isLocalSandboxFallbackEnabled } from '../sandbox/localRuntime';
 import { toSandboxProviderFromRecord } from '../sandbox/providerUtils';
 import type { ReasoningEffort } from '../schemas/modelProvider';
+import { hasConfiguredWebSearchProvider } from '../websearch/providers';
 
 export interface McpConnection {
   url: string;
@@ -50,10 +52,12 @@ export async function getModelDetails({
   tenant_id,
   name,
   store,
+  turnMetadata,
 }: {
   tenant_id: string;
   name: string;
   store: IModelProviderStore;
+  turnMetadata?: TurnMetadata;
 }): Promise<{
   providerConfig: VercelAIProviderConfig;
   defaultModelParams: ModelParams;
@@ -92,7 +96,7 @@ export async function getModelDetails({
       name,
       baseUrl,
       apiKey: provider.manifest.auth?.api_key ?? '',
-      headers: {},
+      headers: turnMetadata === undefined ? {} : await store.resolveInvokeHeaders({ record: provider, turnMetadata }),
     },
     defaultModelParams: model.properties.max_output_tokens ? { max_tokens: model.properties.max_output_tokens } : {},
     modelProperties: { contextLength: model.properties.context_length },
@@ -110,11 +114,13 @@ export async function getMcpConnection({
   name,
   store,
   userRef,
+  turnMetadata,
 }: {
   tenant_id: string;
   name: string;
   store: IMcpServerWithAuthStore;
   userRef: string;
+  turnMetadata?: TurnMetadata;
 }): Promise<McpConnection | undefined> {
   const record = await store.getServer({ tenant_id, name });
   if (record === undefined) {
@@ -122,48 +128,12 @@ export async function getMcpConnection({
   }
   return {
     url: record.manifest.url,
-    headers: store.resolveInvokeHeaders({ record, userRef }),
+    headers: store.resolveInvokeHeaders({
+      record,
+      userRef,
+      ...(turnMetadata === undefined ? {} : { turnMetadata }),
+    }),
   };
-}
-
-/**
- * Expand agent_spec skill names into git mounts from the skill store.
- * Wire url/path/ref/description on the request are ignored — the store row wins.
- * Throws HTTPException(422) if any name is not registered.
- */
-export async function resolveGitSkills({
-  tenant_id,
-  skills,
-  store,
-}: {
-  tenant_id: string;
-  skills: readonly { name: string }[];
-  store: ISkillStore;
-}): Promise<GitSkill[]> {
-  if (skills.length === 0) {
-    return [];
-  }
-  const names = skills.map(skill => skill.name);
-  const records = await store.listSkills({ tenant_id, names });
-  const byName = new Map(records.map(record => [record.name, record]));
-  const resolved: GitSkill[] = [];
-  for (const skill of skills) {
-    const record = byName.get(skill.name);
-    if (record === undefined) {
-      throw new HTTPException(422, {
-        message: `Unknown skill "${skill.name}" — not configured`,
-      });
-    }
-    resolved.push({
-      type: 'git',
-      name: record.manifest.name,
-      description: record.manifest.description,
-      url: record.manifest.url,
-      path: record.manifest.path ?? '',
-      ref: record.manifest.ref,
-    });
-  }
-  return resolved;
 }
 
 /**
@@ -238,7 +208,7 @@ export function buildTurnSandbox(input: {
 /**
  * Cross-checks an AgentSpec against configured models / MCP / skills and
  * sandbox capability. Throws HTTPException(422) for semantic failures.
- * Skills are admitted by name only; mounts expand at turn time.
+ * Skills must exist in the skill store (git name) or pass SFY resolve (registry FQN).
  */
 export async function validateAgentSpec({
   spec,
@@ -247,6 +217,7 @@ export async function validateAgentSpec({
   mcpServerStore,
   skillStore,
   sandboxProviderStore,
+  webSearchProviderStore,
 }: {
   spec: AgentSpec;
   tenant_id: string;
@@ -254,6 +225,7 @@ export async function validateAgentSpec({
   mcpServerStore: IMcpServerStore;
   skillStore: ISkillStore;
   sandboxProviderStore: ISandboxProviderStore;
+  webSearchProviderStore: IWebSearchProviderStore;
 }): Promise<void> {
   const resolved = await getModelDetails({
     tenant_id,
@@ -293,14 +265,7 @@ export async function validateAgentSpec({
 
   const requestedSkills = spec.skills ?? [];
   if (requestedSkills.length > 0) {
-    const names = requestedSkills.map(skill => skill.name);
-    const configuredNames = new Set((await skillStore.listSkills({ tenant_id, names })).map(record => record.name));
-    const unknown = requestedSkills.find(skill => !configuredNames.has(skill.name));
-    if (unknown !== undefined) {
-      throw new HTTPException(422, {
-        message: `Unknown skill "${unknown.name}" — not configured`,
-      });
-    }
+    await skillStore.validateAgentSkills({ tenant_id, skills: requestedSkills });
   }
 
   const wantsSandbox = spec.config.sandbox.enabled;
@@ -312,6 +277,15 @@ export async function validateAgentSpec({
         message: hasSkills
           ? 'skills require a sandbox provider — configure via PUT /settings/sandbox-providers'
           : 'sandbox is enabled but no sandbox provider is configured — PUT /settings/sandbox-providers',
+      });
+    }
+  }
+
+  if (spec.config.web_search.enabled) {
+    const hasProvider = await hasConfiguredWebSearchProvider({ tenant_id, store: webSearchProviderStore });
+    if (!hasProvider) {
+      throw new HTTPException(422, {
+        message: 'web_search is enabled but no web-search provider is configured',
       });
     }
   }

@@ -7,18 +7,37 @@ Expand the name of the chart.
 
 {{/*
 Create a default fully qualified app name.
+
+Always `{release}-{name}` (unless fullnameOverride). The usual Helm
+`contains` collapse is skipped so a parent that dials
+`{{ .Release.Name }}-trueforge` keeps working when the release name
+itself contains "trueforge".
 */}}
 {{- define "trueforge.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
 {{- $name := default .Chart.Name .Values.nameOverride }}
-{{- if contains $name .Release.Name }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
-{{- else }}
 {{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
 {{- end }}
 {{- end }}
+
+{{/*
+Server object name derived from trueforge.fullname (`{fullname}-server`).
+The base is trimmed to leave room for the suffix, so it survives the 63
+character limit; truncating after appending would collapse the server and
+controller names onto each other for long release names.
+*/}}
+{{- define "trueforge.server.fullname" -}}
+{{- printf "%s-server" (include "trueforge.fullname" . | trunc 56 | trimSuffix "-") }}
+{{- end }}
+
+{{/*
+Controller Deployment name (`{fullname}-controller`), truncated the same way
+as trueforge.server.fullname so the suffix always survives.
+*/}}
+{{- define "trueforge.controller.fullname" -}}
+{{- printf "%s-controller" (include "trueforge.fullname" . | trunc 52 | trimSuffix "-") }}
 {{- end }}
 
 {{/*
@@ -32,12 +51,39 @@ Chart name and version as used by the chart label.
 Common labels.
 */}}
 {{- define "trueforge.labels" -}}
-helm.sh/chart: {{ include "trueforge.chart" . }}
-{{ include "trueforge.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- $base := dict "helm.sh/chart" (include "trueforge.chart" .) "app.kubernetes.io/managed-by" .Release.Service -}}
+{{- if .Chart.AppVersion -}}
+{{- $_ := set $base "app.kubernetes.io/version" (.Chart.AppVersion | toString) -}}
+{{- end -}}
+{{- $selector := include "trueforge.selectorLabels" . | fromYaml -}}
+{{- toYaml (mergeOverwrite $base (deepCopy (.Values.global.labels | default dict)) (deepCopy .Values.commonLabels) $selector) -}}
 {{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
+
+{{/*
+Annotations applied to every rendered object.
+*/}}
+{{- define "trueforge.annotations" -}}
+{{- $merged := mergeOverwrite (deepCopy (.Values.global.annotations | default dict)) (deepCopy .Values.commonAnnotations) -}}
+{{- with $merged }}
+{{- toYaml . }}
+{{- end }}
+{{- end }}
+
+{{/*
+Pod labels / annotations, global merged under the chart's own.
+*/}}
+{{- define "trueforge.podLabels" -}}
+{{- $merged := mergeOverwrite (deepCopy (.Values.global.podLabels | default dict)) (deepCopy .Values.podLabels) -}}
+{{- with $merged }}
+{{- toYaml . }}
+{{- end }}
+{{- end }}
+
+{{- define "trueforge.podAnnotations" -}}
+{{- $merged := mergeOverwrite (deepCopy (.Values.global.podAnnotations | default dict)) (deepCopy .Values.podAnnotations) -}}
+{{- with $merged }}
+{{- toYaml . }}
+{{- end }}
 {{- end }}
 
 {{/*
@@ -62,24 +108,23 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 Controller labels.
 */}}
 {{- define "trueforge.controller.labels" -}}
-helm.sh/chart: {{ include "trueforge.chart" . }}
-{{ include "trueforge.controller.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-app.kubernetes.io/component: controller
+{{- $base := dict "helm.sh/chart" (include "trueforge.chart" .) "app.kubernetes.io/managed-by" .Release.Service "app.kubernetes.io/component" "controller" -}}
+{{- if .Chart.AppVersion -}}
+{{- $_ := set $base "app.kubernetes.io/version" (.Chart.AppVersion | toString) -}}
+{{- end -}}
+{{- $selector := include "trueforge.controller.selectorLabels" . | fromYaml -}}
+{{- toYaml (mergeOverwrite $base (deepCopy (.Values.global.labels | default dict)) (deepCopy .Values.commonLabels) $selector) -}}
 {{- end }}
 
 {{/*
 Base URL the controller uses to reach the server API. Defaults to the in-cluster
-server Service when controller.serverUrl is empty.
+server Service when controller.serverUrl is empty (https when mtls is enabled).
 */}}
 {{- define "trueforge.controller.serverUrl" -}}
 {{- if .Values.controller.serverUrl -}}
 {{- .Values.controller.serverUrl -}}
 {{- else -}}
-{{- printf "http://%s:%v" (include "trueforge.fullname" .) .Values.service.port -}}
+{{- printf "%s://%s:%v" (ternary "https" "http" .Values.mtls.enabled) (include "trueforge.server.fullname" .) .Values.service.port -}}
 {{- end -}}
 {{- end }}
 
@@ -102,8 +147,8 @@ Container image reference; tag falls back to the chart appVersion.
 {{- end }}
 
 {{/*
-True when .value is a non-empty string (vs a valueFrom map).
-Expects dict with key "value".
+True when .value is an inline scalar (string or number), not a valueFrom map.
+Used so NOTES / helpers can print "postgres.svc" and skip secretKeyRef maps.
 */}}
 {{- define "trueforge.isLiteralString" -}}
 {{- $v := index . "value" -}}
@@ -111,43 +156,48 @@ Expects dict with key "value".
 {{- end }}
 
 {{/*
-Fail unless .value is a non-empty string or a map with valueFrom.
+Fail unless .value is a non-empty string, a number, or a map with valueFrom.
 Expects dict with keys "name" and "value".
 */}}
 {{- define "trueforge.requireStringOrValueFrom" -}}
 {{- $v := index . "value" -}}
 {{- $name := index . "name" -}}
 {{- if kindIs "string" $v -}}
-{{- if eq $v "" -}}{{- fail (printf "%s is required (string or valueFrom.secretKeyRef)" $name) -}}{{- end -}}
+{{- if eq $v "" -}}{{- fail (printf "%s is required (string, number, or valueFrom.secretKeyRef)" $name) -}}{{- end -}}
+{{- else if or (kindIs "int" $v) (kindIs "int64" $v) (kindIs "float64" $v) -}}
 {{- else if kindIs "map" $v -}}
 {{- if not $v.valueFrom -}}{{- fail (printf "%s map must set valueFrom" $name) -}}{{- end -}}
 {{- else -}}
-{{- fail (printf "%s must be a string or a valueFrom object" $name) -}}
+{{- fail (printf "%s must be a string, number, or valueFrom object" $name) -}}
 {{- end -}}
 {{- end }}
 
 {{/*
-Postgres connection. Sourced from the bundled Bitnami postgresql subchart when
-postgresql.enabled, otherwise from externalPostgres.
+Literal Postgres host/user/database for NOTES and bundled-subchart env.
+Empty when the field is a valueFrom map (external secret/configmap).
 */}}
 {{- define "trueforge.postgres.host" -}}
 {{- if .Values.postgresql.enabled -}}
 {{- printf "%s-postgresql" .Release.Name -}}
-{{- else -}}
-{{- required "externalPostgres.host is required when postgresql.enabled is false" .Values.externalPostgres.host -}}
+{{- else if eq (include "trueforge.isLiteralString" (dict "value" .Values.externalPostgres.host)) "true" -}}
+{{- .Values.externalPostgres.host -}}
 {{- end -}}
 {{- end }}
 
-{{- define "trueforge.postgres.port" -}}
-{{- if .Values.postgresql.enabled -}}5432{{- else -}}{{ .Values.externalPostgres.port }}{{- end -}}
-{{- end }}
-
 {{- define "trueforge.postgres.user" -}}
-{{- if .Values.postgresql.enabled -}}{{ .Values.postgresql.auth.username }}{{- else -}}{{ .Values.externalPostgres.user }}{{- end -}}
+{{- if .Values.postgresql.enabled -}}
+{{- .Values.postgresql.auth.username -}}
+{{- else if eq (include "trueforge.isLiteralString" (dict "value" .Values.externalPostgres.user)) "true" -}}
+{{- .Values.externalPostgres.user -}}
+{{- end -}}
 {{- end }}
 
 {{- define "trueforge.postgres.database" -}}
-{{- if .Values.postgresql.enabled -}}{{ .Values.postgresql.auth.database }}{{- else -}}{{ .Values.externalPostgres.database }}{{- end -}}
+{{- if .Values.postgresql.enabled -}}
+{{- .Values.postgresql.auth.database -}}
+{{- else if eq (include "trueforge.isLiteralString" (dict "value" .Values.externalPostgres.database)) "true" -}}
+{{- .Values.externalPostgres.database -}}
+{{- end -}}
 {{- end }}
 
 {{/*
@@ -158,25 +208,216 @@ postgresql subchart (existingSecret override or <release>-postgresql).
 {{- default (printf "%s-postgresql" .Release.Name) .Values.postgresql.auth.existingSecret -}}
 {{- end }}
 
+{{/*
+Bitnami redis fullname (mirrors common.names.fullname) so REDIS_HOST tracks
+redis.nameOverride / redis.fullnameOverride.
+*/}}
+{{- define "trueforge.redis.fullname" -}}
+{{- if .Values.redis.fullnameOverride -}}
+{{- .Values.redis.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default "redis" .Values.redis.nameOverride -}}
+{{- $releaseName := regexReplaceAll "(-?[^a-z\\d\\-])+-?" (lower .Release.Name) "-" -}}
+{{- if contains $name $releaseName -}}
+{{- $releaseName | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" $releaseName $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{- define "trueforge.redis.bundledUrl" -}}
-{{- printf "redis://%s-redis-master:6379" .Release.Name -}}
+{{- printf "redis://%s-master:6379" (include "trueforge.redis.fullname" .) -}}
+{{- end }}
+
+{{/*
+Resource tier (small | medium | large). Empty when unset so the explicit
+`resources` / `controller.resources` apply. resourceTier wins over a parent
+chart's global.resourceTier.
+*/}}
+{{- define "trueforge.resourceTier" -}}
+{{- $override := .Values.resourceTier | default "" | toString | trim -}}
+{{- $fromGlobal := "" -}}
+{{- with .Values.global -}}
+{{- $fromGlobal = .resourceTier | default "" | toString | trim -}}
+{{- end -}}
+{{- $tier := $override | default $fromGlobal -}}
+{{- if $tier -}}
+{{- if not (has $tier (list "small" "medium" "large")) -}}
+{{- fail (printf "resourceTier must be small, medium, or large (got %q)" $tier) -}}
+{{- end -}}
+{{- $tier -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Server replica count. An explicit server.replicaCount wins; otherwise the
+resource tier decides (small=1, medium=2, large=3), falling back to 1 when no
+tier is set.
+*/}}
+{{- define "trueforge.replicas" -}}
+{{- $tier := include "trueforge.resourceTier" . | trim -}}
+{{- if .Values.server.replicaCount -}}
+{{- .Values.server.replicaCount -}}
+{{- else if eq $tier "small" -}}
+1
+{{- else if eq $tier "medium" -}}
+2
+{{- else if eq $tier "large" -}}
+3
+{{- else -}}
+1
+{{- end -}}
+{{- end }}
+
+{{- define "trueforge.defaultResources.small" -}}
+requests:
+  cpu: 50m
+  memory: 128Mi
+  ephemeral-storage: 128Mi
+limits:
+  cpu: 100m
+  memory: 256Mi
+  ephemeral-storage: 256Mi
+{{- end }}
+
+{{- define "trueforge.defaultResources.medium" -}}
+requests:
+  cpu: 100m
+  memory: 256Mi
+  ephemeral-storage: 256Mi
+limits:
+  cpu: 200m
+  memory: 512Mi
+  ephemeral-storage: 512Mi
+{{- end }}
+
+{{- define "trueforge.defaultResources.large" -}}
+requests:
+  cpu: 500m
+  memory: 512Mi
+  ephemeral-storage: 512Mi
+limits:
+  cpu: 1000m
+  memory: 1024Mi
+  ephemeral-storage: 1024Mi
+{{- end }}
+
+{{- define "trueforge.controller.defaultResources.small" -}}
+requests:
+  cpu: 50m
+  memory: 128Mi
+  ephemeral-storage: 128Mi
+limits:
+  cpu: 100m
+  memory: 256Mi
+  ephemeral-storage: 256Mi
+{{- end }}
+
+{{- define "trueforge.controller.defaultResources.medium" -}}
+requests:
+  cpu: 100m
+  memory: 256Mi
+  ephemeral-storage: 128Mi
+limits:
+  cpu: 200m
+  memory: 512Mi
+  ephemeral-storage: 256Mi
+{{- end }}
+
+{{- define "trueforge.controller.defaultResources.large" -}}
+requests:
+  cpu: 500m
+  memory: 512Mi
+  ephemeral-storage: 128Mi
+limits:
+  cpu: 1000m
+  memory: 1024Mi
+  ephemeral-storage: 256Mi
+{{- end }}
+
+{{/*
+Server requests/limits. Default is `.Values.resources`. A resourceTier preset
+replaces that table (chart resource defaults must not overlay it).
+*/}}
+{{- define "trueforge.resources" -}}
+{{- $tier := include "trueforge.resourceTier" . | trim -}}
+{{- if $tier -}}
+{{- $defaultsYaml := "" -}}
+{{- if eq $tier "small" -}}
+  {{- $defaultsYaml = include "trueforge.defaultResources.small" . -}}
+{{- else if eq $tier "medium" -}}
+  {{- $defaultsYaml = include "trueforge.defaultResources.medium" . -}}
+{{- else if eq $tier "large" -}}
+  {{- $defaultsYaml = include "trueforge.defaultResources.large" . -}}
+{{- end -}}
+{{- $defaultsYaml -}}
+{{- else -}}
+{{- toYaml (.Values.resources | default dict) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Controller requests/limits. Default is `.Values.controller.resources`.
+Replica count is always 1, even when a resourceTier is set.
+*/}}
+{{- define "trueforge.controller.resources" -}}
+{{- $tier := include "trueforge.resourceTier" . | trim -}}
+{{- if $tier -}}
+{{- $defaultsYaml := "" -}}
+{{- if eq $tier "small" -}}
+  {{- $defaultsYaml = include "trueforge.controller.defaultResources.small" . -}}
+{{- else if eq $tier "medium" -}}
+  {{- $defaultsYaml = include "trueforge.controller.defaultResources.medium" . -}}
+{{- else if eq $tier "large" -}}
+  {{- $defaultsYaml = include "trueforge.controller.defaultResources.large" . -}}
+{{- end -}}
+{{- $defaultsYaml -}}
+{{- else -}}
+{{- toYaml (.Values.controller.resources | default dict) -}}
+{{- end -}}
+{{- end }}
+
+{{- define "trueforge.tmpEmptyDirSizeLimit" -}}
+{{- $merged := include "trueforge.resources" . | fromYaml | default dict -}}
+{{- index ($merged.limits | default dict) "ephemeral-storage" -}}
+{{- end }}
+
+{{- define "trueforge.controller.tmpEmptyDirSizeLimit" -}}
+{{- $merged := include "trueforge.controller.resources" . | fromYaml | default dict -}}
+{{- index ($merged.limits | default dict) "ephemeral-storage" -}}
 {{- end }}
 
 {{/*
 JSON env entry from a string | { valueFrom: ... } field.
 Expects: name (env var), field (values path for errors), value.
 Literals become env value; valueFrom maps are passed through. The chart does
-not create Secrets — callers who need secretKeyRef must supply valueFrom.
+not create Secrets; callers who need secretKeyRef must supply valueFrom.
 */}}
 {{- define "trueforge.env.fromStringOrValueFrom" -}}
 {{- $name := index . "name" -}}
 {{- $field := index . "field" -}}
 {{- $value := index . "value" -}}
 {{- include "trueforge.requireStringOrValueFrom" (dict "name" $field "value" $value) -}}
-{{- if eq (include "trueforge.isLiteralString" (dict "value" $value)) "true" -}}
-{{- dict "name" $name "value" $value | toJson -}}
-{{- else -}}
+{{- if kindIs "map" $value -}}
 {{- dict "name" $name "valueFrom" $value.valueFrom | toJson -}}
+{{- else -}}
+{{- dict "name" $name "value" ($value | toString) | toJson -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+One env entry from the `env` map. Scalars become a literal value; a map must
+carry valueFrom and is passed through untouched.
+*/}}
+{{- define "trueforge.env.item" -}}
+{{- $name := index . "name" -}}
+{{- $value := index . "value" -}}
+{{- if kindIs "map" $value -}}
+{{- if not $value.valueFrom -}}{{- fail (printf "env.%s must set valueFrom when given as a map" $name) -}}{{- end -}}
+{{- dict "name" $name "valueFrom" $value.valueFrom | toJson -}}
+{{- else -}}
+{{- dict "name" $name "value" ($value | toString) | toJson -}}
 {{- end -}}
 {{- end }}
 
@@ -192,22 +433,113 @@ fields, wires bundled Postgres/Redis, optional OIDC, then server.extraEnv.
 {{- $env = append $env (dict "name" "STANDALONE" "value" "false") -}}
 {{- $env = append $env (dict "name" "GRACEFUL_TIMEOUT_SECONDS" "value" (.Values.server.gracefulTimeoutSeconds | toString)) -}}
 
+{{- $externalRedis := .Values.externalRedis | default dict -}}
+{{- $sentinel := $externalRedis.sentinel | default dict -}}
+{{- $auth := $externalRedis.auth | default dict -}}
+{{- $tls := $externalRedis.tls | default dict -}}
+{{- $sentinelEnabled := eq (toString ($sentinel.enabled | default false)) "true" -}}
+{{- $tlsEnabled := eq (toString ($tls.enabled | default false)) "true" -}}
+{{- if and .Values.redis.enabled $externalRedis.enabled -}}
+{{- fail "redis.enabled and externalRedis.enabled are mutually exclusive" -}}
+{{- end -}}
 {{- if .Values.redis.enabled -}}
 {{- $env = append $env (dict "name" "REDIS_URL" "value" (include "trueforge.redis.bundledUrl" .)) -}}
+{{- else if $externalRedis.enabled -}}
+{{- if and $sentinelEnabled (or $externalRedis.url $externalRedis.host) -}}
+{{- fail "externalRedis.sentinel cannot be combined with externalRedis.url or externalRedis.host" -}}
+{{- end -}}
+{{- if and $externalRedis.url $externalRedis.host -}}
+{{- fail "externalRedis.url and externalRedis.host are mutually exclusive" -}}
+{{- end -}}
+{{- if and (not $sentinelEnabled) (not $externalRedis.url) (not $externalRedis.host) -}}
+{{- fail "externalRedis.url or externalRedis.host is required when using external Redis without sentinel" -}}
+{{- end -}}
+{{- if and (not $sentinelEnabled) $externalRedis.url (or $auth.username $auth.password (ne (($externalRedis.db | default 0) | toString) "0")) -}}
+{{- fail "externalRedis.auth and a non-zero externalRedis.db are ignored when externalRedis.url is set; encode them in the url or use host mode" -}}
+{{- end -}}
+{{- if $sentinelEnabled -}}
+{{- $_ := required "externalRedis.sentinel.nodes is required when externalRedis.sentinel.enabled is true" (join "," $sentinel.nodes) -}}
+{{- $_ := required "externalRedis.sentinel.masterName is required when externalRedis.sentinel.enabled is true" $sentinel.masterName -}}
+{{- $env = append $env (dict "name" "REDIS_SENTINEL_ENABLED" "value" "true") -}}
+{{- $env = append $env (dict "name" "REDIS_SENTINEL_NODES" "value" (join "," $sentinel.nodes)) -}}
+{{- $env = append $env (dict "name" "REDIS_SENTINEL_MASTER_NAME" "value" $sentinel.masterName) -}}
+{{- $env = append $env (dict "name" "REDIS_DB" "value" (($externalRedis.db | default 0) | toString)) -}}
+{{- if $auth.username -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_USERNAME" "field" "externalRedis.auth.username" "value" $auth.username) | fromJson) -}}
+{{- end -}}
+{{- if $auth.password -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_PASSWORD" "field" "externalRedis.auth.password" "value" $auth.password) | fromJson) -}}
+{{- end -}}
+{{- $sentinelAuth := $sentinel.auth | default dict -}}
+{{- if $sentinelAuth.username -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_SENTINEL_USERNAME" "field" "externalRedis.sentinel.auth.username" "value" $sentinelAuth.username) | fromJson) -}}
+{{- end -}}
+{{- if $sentinelAuth.password -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_SENTINEL_PASSWORD" "field" "externalRedis.sentinel.auth.password" "value" $sentinelAuth.password) | fromJson) -}}
+{{- end -}}
+{{- else if $externalRedis.url -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_URL" "field" "externalRedis.url" "value" $externalRedis.url) | fromJson) -}}
 {{- else -}}
-{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_URL" "field" "externalRedis.url" "value" .Values.externalRedis.url) | fromJson) -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_HOST" "field" "externalRedis.host" "value" $externalRedis.host) | fromJson) -}}
+{{- $env = append $env (dict "name" "REDIS_PORT" "value" (($externalRedis.port | default 6379) | toString)) -}}
+{{- $env = append $env (dict "name" "REDIS_DB" "value" (($externalRedis.db | default 0) | toString)) -}}
+{{- if $auth.username -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_USERNAME" "field" "externalRedis.auth.username" "value" $auth.username) | fromJson) -}}
+{{- end -}}
+{{- if $auth.password -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_PASSWORD" "field" "externalRedis.auth.password" "value" $auth.password) | fromJson) -}}
+{{- end -}}
+{{- end -}}
+{{- $env = append $env (dict "name" "REDIS_TLS_ENABLED" "value" (ternary "true" "false" $tlsEnabled)) -}}
+{{- if $tlsEnabled -}}
+{{- $rejectUnauthorized := true -}}
+{{- if hasKey $tls "rejectUnauthorized" -}}
+{{- $rejectUnauthorized = eq (toString $tls.rejectUnauthorized) "true" -}}
+{{- end -}}
+{{- $env = append $env (dict "name" "REDIS_TLS_REJECT_UNAUTHORIZED" "value" (ternary "true" "false" $rejectUnauthorized)) -}}
+{{- if $tls.caCert -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_TLS_CA_CERT" "field" "externalRedis.tls.caCert" "value" $tls.caCert) | fromJson) -}}
+{{- end -}}
+{{- if $tls.serverName -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_TLS_SERVERNAME" "field" "externalRedis.tls.serverName" "value" $tls.serverName) | fromJson) -}}
+{{- end -}}
+{{- if $tls.cert -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_TLS_CERT" "field" "externalRedis.tls.cert" "value" $tls.cert) | fromJson) -}}
+{{- end -}}
+{{- if $tls.key -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_TLS_KEY" "field" "externalRedis.tls.key" "value" $tls.key) | fromJson) -}}
+{{- end -}}
+{{- if $tls.keyPassphrase -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "REDIS_TLS_KEY_PASSPHRASE" "field" "externalRedis.tls.keyPassphrase" "value" $tls.keyPassphrase) | fromJson) -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- fail "set redis.enabled or externalRedis.enabled" -}}
 {{- end -}}
 
+{{- if .Values.postgresql.enabled -}}
 {{- $env = append $env (dict "name" "POSTGRES_HOST" "value" (include "trueforge.postgres.host" .)) -}}
-{{- $env = append $env (dict "name" "POSTGRES_PORT" "value" (include "trueforge.postgres.port" . | toString)) -}}
+{{- $env = append $env (dict "name" "POSTGRES_PORT" "value" "5432") -}}
 {{- $env = append $env (dict "name" "POSTGRES_DB" "value" (include "trueforge.postgres.database" .)) -}}
 {{- $env = append $env (dict "name" "POSTGRES_USER" "value" (include "trueforge.postgres.user" .)) -}}
-{{- if .Values.postgresql.enabled -}}
 {{- $env = append $env (dict "name" "POSTGRES_PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" (include "trueforge.postgres.secretName" .) "key" "password"))) -}}
 {{- else -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "POSTGRES_HOST" "field" "externalPostgres.host" "value" .Values.externalPostgres.host) | fromJson) -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "POSTGRES_PORT" "field" "externalPostgres.port" "value" .Values.externalPostgres.port) | fromJson) -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "POSTGRES_DB" "field" "externalPostgres.database" "value" .Values.externalPostgres.database) | fromJson) -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "POSTGRES_USER" "field" "externalPostgres.user" "value" .Values.externalPostgres.user) | fromJson) -}}
 {{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "POSTGRES_PASSWORD" "field" "externalPostgres.password" "value" .Values.externalPostgres.password) | fromJson) -}}
 {{- if .Values.externalPostgres.sslMode -}}
 {{- $env = append $env (dict "name" "POSTGRES_SSL_MODE" "value" .Values.externalPostgres.sslMode) -}}
+{{- end -}}
+{{- if .Values.externalPostgres.sslCertPath -}}
+{{- $env = append $env (dict "name" "POSTGRES_SSL_CERT_PATH" "value" .Values.externalPostgres.sslCertPath) -}}
+{{- end -}}
+{{- if .Values.externalPostgres.sslKeyPath -}}
+{{- $env = append $env (dict "name" "POSTGRES_SSL_KEY_PATH" "value" .Values.externalPostgres.sslKeyPath) -}}
+{{- end -}}
+{{- if .Values.externalPostgres.sslCaPath -}}
+{{- $env = append $env (dict "name" "POSTGRES_SSL_CA_PATH" "value" .Values.externalPostgres.sslCaPath) -}}
 {{- end -}}
 {{- end -}}
 
@@ -227,14 +559,67 @@ fields, wires bundled Postgres/Redis, optional OIDC, then server.extraEnv.
 {{- end -}}
 {{- end -}}
 
+{{- $env = append $env (dict "name" "NETWORK_POLICY_ENABLED" "value" (.Values.networkPolicy.enabled | toString)) -}}
+{{- if .Values.networkPolicy.outbound.allowedHosts -}}
+{{- $env = append $env (dict "name" "OUTBOUND_URL_ALLOWED_HOSTS" "value" (.Values.networkPolicy.outbound.allowedHosts | toJson)) -}}
+{{- end -}}
+{{- if .Values.networkPolicy.outbound.blockedHosts -}}
+{{- $env = append $env (dict "name" "OUTBOUND_URL_BLOCKED_HOSTS" "value" (.Values.networkPolicy.outbound.blockedHosts | toJson)) -}}
+{{- end -}}
+
+{{- /* Controller -> server auth. The app rejects an empty value when peered. */ -}}
+{{- $env = append $env (include "trueforge.env.fromStringOrValueFrom" (dict "name" "TRUEFORGE_API_KEY" "field" "apiKey" "value" .Values.apiKey) | fromJson) -}}
+
+{{- /* Node reads its own bundled CA store unless told otherwise. */ -}}
+{{- if eq (include "trueforge.customCA.enabled" .) "true" -}}
+{{- $env = append $env (dict "name" "NODE_EXTRA_CA_CERTS" "value" "/etc/ssl/certs/ca-certificates.crt") -}}
+{{- end -}}
+
+{{- /* Bundled dev sandbox server: point the app at the subchart's Service.
+       The subchart's fullname helper computes the name; it needs the
+       subchart's scope (its values live under our tfy-sandbox-server key)
+       and is only defined while the dependency is enabled - the same flag
+       that gates this block. */ -}}
+{{- if (.Values.truefoundry | default dict).devSandboxServerEnabled -}}
+{{- $sandbox := index .Values "tfy-sandbox-server" | default dict -}}
+{{- $sandboxSvc := $sandbox.service | default dict -}}
+{{- $sandboxHost := include "tfy-sandbox-server.fullname" (dict "Values" $sandbox "Chart" (dict "Name" "tfy-sandbox-server") "Release" .Release) -}}
+{{- $env = append $env (dict "name" "TRUEFOUNDRY_SANDBOX_ENABLED" "value" "true") -}}
+{{- $env = append $env (dict "name" "TRUEFOUNDRY_SANDBOX_PROVIDER" "value" "truefoundry") -}}
+{{- $env = append $env (dict "name" "TRUEFOUNDRY_SANDBOX_SERVER_URL" "value" (printf "http://%s:%v" $sandboxHost ($sandboxSvc.port | default 8080))) -}}
+{{- $env = append $env (dict "name" "TRUEFOUNDRY_SANDBOX_SETTINGS" "value" (dict "nats_bridge_url" (printf "ws://%s:%v" $sandboxHost ($sandboxSvc.natsBridgePort | default 4444)) | toJson)) -}}
+{{- end -}}
+
+{{- /* env map: replace in place when the chart already emits the name, else
+       append. Keeps the pod spec free of duplicate env entries. */ -}}
+{{- $overrides := .Values.env | default dict -}}
+{{- if $overrides -}}
+{{- $out := list -}}
+{{- $seen := dict -}}
+{{- range $item := $env -}}
+{{- if hasKey $overrides $item.name -}}
+{{- $out = append $out (include "trueforge.env.item" (dict "name" $item.name "value" (index $overrides $item.name)) | fromJson) -}}
+{{- else -}}
+{{- $out = append $out $item -}}
+{{- end -}}
+{{- $_ := set $seen $item.name true -}}
+{{- end -}}
+{{- range $name := (keys $overrides | sortAlpha) -}}
+{{- if not (hasKey $seen $name) -}}
+{{- $out = append $out (include "trueforge.env.item" (dict "name" $name "value" (index $overrides $name)) | fromJson) -}}
+{{- end -}}
+{{- end -}}
+{{- $env = $out -}}
+{{- end -}}
+
 {{- range .Values.server.extraEnv -}}
 {{- $env = append $env . -}}
 {{- end -}}
 
 {{- if .Values.mtls.enabled -}}
 {{- $_ := required "mtls.secretName is required when mtls.enabled is true" .Values.mtls.secretName -}}
-{{- $env = append $env (dict "name" "TRUEFORGE_MTLS_ENABLED" "value" "true") -}}
-{{- $env = append $env (dict "name" "TRUEFORGE_MTLS_CERTS_DIR" "value" .Values.mtls.certsDir) -}}
+{{- $env = append $env (dict "name" "MTLS_ENABLED" "value" "true") -}}
+{{- $env = append $env (dict "name" "MTLS_CERTS_DIR" "value" .Values.mtls.certsDir) -}}
 {{- end -}}
 
 {{- toYaml $env -}}
@@ -273,4 +658,141 @@ mTLS secret volumeMount when mtls.enabled.
   mountPath: {{ .Values.mtls.certsDir | quote }}
   readOnly: true
 {{- end -}}
+{{- end }}
+
+{{/*
+Scheduling and pull secrets. A parent chart's global.* is the base; the chart's
+own value wins. Tolerations append rather than replace.
+*/}}
+{{- define "trueforge.imagePullSecrets" -}}
+{{- $secrets := .Values.imagePullSecrets | default (.Values.global.imagePullSecrets | default list) -}}
+{{- with $secrets }}
+{{- toYaml . }}
+{{- end }}
+{{- end }}
+
+{{- define "trueforge.nodeSelector" -}}
+{{- $merged := mergeOverwrite (deepCopy (.Values.global.nodeSelector | default dict)) (deepCopy .Values.nodeSelector) -}}
+{{- with $merged }}
+{{- toYaml . }}
+{{- end }}
+{{- end }}
+
+{{- define "trueforge.affinity" -}}
+{{- $merged := mergeOverwrite (deepCopy (.Values.global.affinity | default dict)) (deepCopy .Values.affinity) -}}
+{{- with $merged }}
+{{- toYaml . }}
+{{- end }}
+{{- end }}
+
+{{- define "trueforge.tolerations" -}}
+{{- $merged := concat (.Values.global.tolerations | default list) (.Values.tolerations | default list) -}}
+{{- with $merged }}
+{{- toYaml . }}
+{{- end }}
+{{- end }}
+
+{{/*
+Custom CA. Honours global.customCA whether set on this chart (standalone) or
+inherited from a parent chart. Two modes: mount an operator-supplied full
+bundle straight over /etc/ssl/certs, or merge a CA into the system bundle with
+an initContainer. The chart renders its own ConfigMap when given a certificate,
+so it does not depend on one the parent may or may not have created.
+*/}}
+{{- define "trueforge.customCA" -}}
+{{- .Values.global.customCA | default dict | toYaml -}}
+{{- end }}
+
+{{- define "trueforge.customCA.enabled" -}}
+{{- $ca := include "trueforge.customCA" . | fromYaml -}}
+{{- if $ca.enabled -}}true{{- end -}}
+{{- end }}
+
+{{- define "trueforge.customCA.validate" -}}
+{{- $ca := include "trueforge.customCA" . | fromYaml -}}
+{{- if $ca.enabled -}}
+{{- $existing := ($ca.existingConfigMap | default dict).name -}}
+{{- if and (not $ca.certificate) (not $existing) -}}
+{{- fail "global.customCA.enabled is true but neither global.customCA.certificate nor global.customCA.existingConfigMap.name is set. Provide one of them." -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{- define "trueforge.customCA.useDirectMount" -}}
+{{- $ca := include "trueforge.customCA" . | fromYaml -}}
+{{- $existing := $ca.existingConfigMap | default dict -}}
+{{- if and $existing.name $existing.overrideCAList -}}true{{- end -}}
+{{- end }}
+
+{{- define "trueforge.customCA.configMapName" -}}
+{{- include "trueforge.customCA.validate" . -}}
+{{- $ca := include "trueforge.customCA" . | fromYaml -}}
+{{- $existing := ($ca.existingConfigMap | default dict).name -}}
+{{- if $existing -}}
+{{- $existing -}}
+{{- else -}}
+{{- printf "%s-custom-ca" (include "trueforge.fullname" .) -}}
+{{- end -}}
+{{- end }}
+
+{{- define "trueforge.customCA.initContainer" -}}
+{{- if eq (include "trueforge.customCA.enabled" .) "true" }}
+{{- if ne (include "trueforge.customCA.useDirectMount" .) "true" }}
+{{- $ca := include "trueforge.customCA" . | fromYaml }}
+{{- $image := $ca.image | default dict }}
+- name: configure-custom-ca
+  image: "{{ $image.registry | default "tfy.jfrog.io" }}/{{ $image.repository }}:{{ $image.tag }}"
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  {{- with $ca.securityContext }}
+  securityContext:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  command: ["sh", "-c"]
+  args:
+    - |
+      set -e
+      cat /etc/ssl/certs/ca-certificates.crt /custom-ca/ca-certificates.crt > /ssl-certs/ca-certificates.crt
+  {{- with $ca.env }}
+  env:
+    {{- range $key, $val := . }}
+    - name: {{ $key }}
+      value: {{ $val | quote }}
+    {{- end }}
+  {{- end }}
+  volumeMounts:
+    - name: custom-ca
+      mountPath: /custom-ca
+      readOnly: true
+    - name: ssl-certs
+      mountPath: /ssl-certs
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- define "trueforge.customCA.volumes" -}}
+{{- if eq (include "trueforge.customCA.enabled" .) "true" }}
+{{- $ca := include "trueforge.customCA" . | fromYaml }}
+- name: custom-ca
+  configMap:
+    name: {{ include "trueforge.customCA.configMapName" . }}
+{{- if ne (include "trueforge.customCA.useDirectMount" .) "true" }}
+- name: ssl-certs
+  emptyDir:
+    sizeLimit: {{ (($ca.emptyDir | default dict).sslCerts | default dict).sizeLimit | default "10Mi" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- define "trueforge.customCA.volumeMounts" -}}
+{{- if eq (include "trueforge.customCA.enabled" .) "true" }}
+{{- if eq (include "trueforge.customCA.useDirectMount" .) "true" }}
+- name: custom-ca
+  mountPath: /etc/ssl/certs
+  readOnly: true
+{{- else }}
+- name: ssl-certs
+  mountPath: /etc/ssl/certs
+  readOnly: true
+{{- end }}
+{{- end }}
 {{- end }}

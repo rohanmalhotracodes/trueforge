@@ -82,6 +82,8 @@ Jane's follow-ups about the refund stay in `sess-7f2a9c1b`. Bob's question runs 
 
 Persist the session `id` so Jane can come back tomorrow and pick up where she left off. Only one turn runs in a session at a time.
 
+Every session you run this way is also recorded in the [Sessions](/sessions) view, where you can inspect its turns, tool calls, subagents, and timing.
+
 ### Turn
 
 A **turn** is one request in the conversation: a single back-and-forth between your app and the agent. Each time Jane sends a message (or your app sends an approval), you create a new turn. Turns in a session **chain automatically** (`previous_turn_id` defaults to `"auto"`), so the agent sees every earlier turn without you resending history.
@@ -102,7 +104,7 @@ flowchart LR
 | **Turn 3** | Jane (or a support rep) | Approval: allow `process_refund`               | Agent runs the refund and sends a confirmation.                 |
 
 <Note>
-  A turn can also pause when the agent asks a clarifying question ([`tool.response_required`](/create-agent/overview#whats-in-an-agent))
+  A turn can also pause when the agent asks a clarifying question ([`tool.response_required`](/api/use-agent#tool-response_required))
   or needs MCP OAuth ([`mcp.auth_required`](/mcp-servers#in-chat-authentication)). You resume with a new turn, just like
   Turn 3 above.
 </Note>
@@ -143,7 +145,7 @@ Sample payload:
 }
 ```
 
-Every event carries an `id` and a `thread_id` (`"main"` for the root agent, a generated id for [subagents](/key-features/subagents), or `null` for run-level events), plus a **sequence number** used for [resuming after a disconnect](/api/use-agent). The stream always opens with `turn.created` and closes with `turn.done`. Field-level schemas for every event type are in the [turn events reference](/api/use-agent#turn-events-reference).
+Every event carries an `id` and a `thread_id` (`"main"` for the root agent, a generated id for [subagents](/key-features/subagents), or `null` for run-level events), plus a **sequence number** used for [resuming after a disconnect](/api/use-agent#resume-a-stream). The stream always opens with `turn.created` and closes with `turn.done`. Field-level schemas for every event type are in the [turn events reference](/api/use-agent#turn-events-reference).
 
 ### Delta
 
@@ -168,6 +170,8 @@ Your order ORD-2031
 Your order ORD-2031 shipped on June 12.
 Your order ORD-2031 shipped on June 12. Total: $1,240.00.
 ```
+
+In the SDK, use TypeScript `isEventDelta` / `mergeEventDelta` or Python `is_event_delta` / `merge_event_delta` from `trueforge_sdk.events`. See [Create and stream a turn](/api/use-agent#create-and-stream-a-turn).
 
 Deltas only exist on the live stream. When you list a turn's events afterwards (`GET .../events`), each `model.message` is already merged, so you use it directly.
 

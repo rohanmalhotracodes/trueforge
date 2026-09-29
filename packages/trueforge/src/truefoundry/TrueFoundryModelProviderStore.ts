@@ -11,29 +11,45 @@ import {
   type ModelProviderRecord,
   type UpsertModelProviderInput,
 } from '../db/modelProviderStore';
+import type { TurnMetadata } from '../db/turnMetadata';
 import type { AvailableModel, ModelProviderManifest } from '../schemas/modelProvider';
-import { accessTokenForRequest, asTrueFoundryRequestContext, type ResolveAccessToken } from './accessToken';
+import {
+  accessTokenForRequest,
+  actorAuthorizationHeaders,
+  asTrueFoundryRequestContext,
+  type ResolveGatewayAuthorization,
+  type ResolveServiceFoundryAuthorization,
+} from './accessToken';
 import { trueFoundryManaged } from './errors';
-import { mapEnabledModels, resolveDefaultGatewayUrl, type TrueFoundryEnabledModel } from './mapEnabledModels';
+import { gatewayMetadataHeadersForTurn } from './gatewayMetadata';
+import {
+  filterEnvModels,
+  mapEnabledModels,
+  resolveDefaultGatewayUrl,
+  type TrueFoundryEnabledModel,
+} from './mapEnabledModels';
 import { TrueFoundryServiceFoundryServerClient } from './TrueFoundryServiceFoundryServerClient';
 
 export class TrueFoundryModelProviderStore<TTransaction = never> implements IModelProviderStore<TTransaction> {
   readonly #client: TrueFoundryServiceFoundryServerClient;
-  readonly #resolveAccessToken: ResolveAccessToken;
+  readonly #resolveServiceFoundryAuthorization: ResolveServiceFoundryAuthorization;
+  readonly #resolveGatewayAuthorization: ResolveGatewayAuthorization;
 
   constructor(input: {
     client: TrueFoundryServiceFoundryServerClient;
-    context: RequestContext;
+    requestContext: RequestContext;
     agent: AgentRecord | undefined;
     logger: Logger;
   }) {
     this.#client = input.client;
-    this.#resolveAccessToken = accessTokenForRequest({
+    const tokens = accessTokenForRequest({
       client: input.client,
-      context: asTrueFoundryRequestContext(input.context),
+      requestContext: asTrueFoundryRequestContext(input.requestContext),
       agent: input.agent,
       logger: input.logger,
     });
+    this.#resolveServiceFoundryAuthorization = tokens.resolveServiceFoundryAuthorization;
+    this.#resolveGatewayAuthorization = tokens.resolveGatewayAuthorization;
   }
 
   async listProviders(input: ListModelProvidersInput, transaction?: TTransaction): Promise<ModelProviderRecord[]> {
@@ -78,24 +94,43 @@ export class TrueFoundryModelProviderStore<TTransaction = never> implements IMod
     return flattenProviderModels(await this.listProviders(input, transaction));
   }
 
+  async resolveInvokeHeaders(input: {
+    record: ModelProviderRecord;
+    turnMetadata?: TurnMetadata;
+  }): Promise<Record<string, string>> {
+    void input.record;
+    const authorization = await this.#resolveGatewayAuthorization();
+    return {
+      ...actorAuthorizationHeaders(authorization),
+      ...gatewayMetadataHeadersForTurn(input.turnMetadata),
+    };
+  }
+
   async #records(input: {
     tenant_id: string;
     filter?: { provider_account_name: string; name: string };
   }): Promise<ModelProviderRecord[]> {
-    const accessToken = await this.#resolveAccessToken();
+    const [serviceFoundryAccessToken, gatewayAuthorization] = await Promise.all([
+      this.#resolveServiceFoundryAuthorization(),
+      this.#resolveGatewayAuthorization(),
+    ]);
     const [integrations, installations] = await Promise.all([
       this.#client.listProviderIntegrations({
-        accessToken,
+        accessToken: serviceFoundryAccessToken,
         ...(input.filter !== undefined ? { filter: input.filter } : {}),
       }),
-      this.#client.listGatewayInstallations(accessToken),
+      this.#client.listGatewayInstallations(serviceFoundryAccessToken),
     ]);
     const gatewayUrl = resolveDefaultGatewayUrl(installations);
+    const models = filterEnvModels({
+      tenant_id: input.tenant_id,
+      models: mapEnabledModels({ integrations }),
+    });
     return toRecords({
       tenant_id: input.tenant_id,
       gatewayUrl,
-      accessToken,
-      models: mapEnabledModels({ integrations }),
+      accessToken: gatewayAuthorization.subjectToken,
+      models,
     });
   }
 }

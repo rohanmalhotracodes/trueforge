@@ -1,6 +1,6 @@
 {
     "name": "@truefoundry/trueforge-sdk",
-    "version": "0.1.4-rc.2",
+    "version": "0.2.1-rc.0",
     "private": false,
     "type": "commonjs",
     "main": "./dist/cjs/index.js",
@@ -32,6 +32,17 @@
                 "default": "./dist/cjs/serialization/index.js"
             },
             "default": "./dist/cjs/serialization/index.js"
+        },
+        "./internal": {
+            "import": {
+                "types": "./dist/esm/api/resources/internal/exports.d.mts",
+                "default": "./dist/esm/api/resources/internal/exports.mjs"
+            },
+            "require": {
+                "types": "./dist/cjs/api/resources/internal/exports.d.ts",
+                "default": "./dist/cjs/api/resources/internal/exports.js"
+            },
+            "default": "./dist/cjs/api/resources/internal/exports.js"
         },
         "./agents": {
             "import": {
@@ -176,16 +187,16 @@
             },
             "default": "./dist/cjs/api/resources/catalogs/resources/skills/exports.js"
         },
-        "./internal": {
+        "./catalogs/webSearchProviders": {
             "import": {
-                "types": "./dist/esm/api/resources/internal/exports.d.mts",
-                "default": "./dist/esm/api/resources/internal/exports.mjs"
+                "types": "./dist/esm/api/resources/catalogs/resources/webSearchProviders/exports.d.mts",
+                "default": "./dist/esm/api/resources/catalogs/resources/webSearchProviders/exports.mjs"
             },
             "require": {
-                "types": "./dist/cjs/api/resources/internal/exports.d.ts",
-                "default": "./dist/cjs/api/resources/internal/exports.js"
+                "types": "./dist/cjs/api/resources/catalogs/resources/webSearchProviders/exports.d.ts",
+                "default": "./dist/cjs/api/resources/catalogs/resources/webSearchProviders/exports.js"
             },
-            "default": "./dist/cjs/api/resources/internal/exports.js"
+            "default": "./dist/cjs/api/resources/catalogs/resources/webSearchProviders/exports.js"
         },
         "./internal/metrics": {
             "import": {
@@ -197,6 +208,17 @@
                 "default": "./dist/cjs/api/resources/internal/resources/metrics/exports.js"
             },
             "default": "./dist/cjs/api/resources/internal/resources/metrics/exports.js"
+        },
+        "./internal/schedules": {
+            "import": {
+                "types": "./dist/esm/api/resources/internal/resources/schedules/exports.d.mts",
+                "default": "./dist/esm/api/resources/internal/resources/schedules/exports.mjs"
+            },
+            "require": {
+                "types": "./dist/cjs/api/resources/internal/resources/schedules/exports.d.ts",
+                "default": "./dist/cjs/api/resources/internal/resources/schedules/exports.js"
+            },
+            "default": "./dist/cjs/api/resources/internal/resources/schedules/exports.js"
         },
         "./internal/sessions": {
             "import": {
@@ -274,6 +296,17 @@
                 "default": "./dist/cjs/api/resources/settings/resources/skills/exports.js"
             },
             "default": "./dist/cjs/api/resources/settings/resources/skills/exports.js"
+        },
+        "./settings/webSearchProviders": {
+            "import": {
+                "types": "./dist/esm/api/resources/settings/resources/webSearchProviders/exports.d.mts",
+                "default": "./dist/esm/api/resources/settings/resources/webSearchProviders/exports.mjs"
+            },
+            "require": {
+                "types": "./dist/cjs/api/resources/settings/resources/webSearchProviders/exports.d.ts",
+                "default": "./dist/cjs/api/resources/settings/resources/webSearchProviders/exports.js"
+            },
+            "default": "./dist/cjs/api/resources/settings/resources/webSearchProviders/exports.js"
         },
         "./package.json": "./package.json"
     },

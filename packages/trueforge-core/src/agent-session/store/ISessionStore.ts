@@ -12,7 +12,7 @@ import type { TurnRecord } from '../models/TurnRecord';
 import type { PersistedTurnEvent, SessionEventItem } from '../schemas/events';
 import type { TokenPagination } from '../schemas/pagination';
 import type { SessionMetadata } from '../schemas/session';
-import type { CancellationReason, TerminalTurnState } from '../schemas/turn';
+import type { CancellationReason, TerminalTurnState, TurnInboundEventItem } from '../schemas/turn';
 
 /**
  * Caller-supplied fields for creating a session; the store owns timestamps and tip state.
@@ -37,11 +37,19 @@ export type UpdateSessionInput<TSessionCustom extends object = Record<string, ne
   agent: Extract<SessionRecord<TSessionCustom>['agent'], { type: 'inline' }> | undefined;
   title: SessionRecord<TSessionCustom>['title'] | undefined;
   metadata: SessionRecord<TSessionCustom>['metadata'] | undefined;
+  /** When omitted, the stored flag is left unchanged. */
+  shared: SessionRecord<TSessionCustom>['shared'] | undefined;
 };
 
 export interface GetSessionInput {
   tenant_id: string;
   session_id: string;
+}
+
+export interface GetOwnedIdsInput {
+  tenant_id: string;
+  ids: readonly string[];
+  subject_id: string;
 }
 
 export interface GetSessionByExternalIdInput {
@@ -164,6 +172,21 @@ export interface AppendToEventsInput {
   events: PersistedTurnEvent[];
 }
 
+export interface InsertTurnInboundEventsInput {
+  session_id: string;
+  /** Tip that receives this batch. One send = one tip; stamp every row with this id. */
+  turn_id: string;
+  /**
+   * Caller mints `event_id` (monotonic ULID) — same contract as session_event.
+   * Empty array is a no-op.
+   */
+  events: {
+    event_id: string;
+    payload: TurnInboundEventItem;
+    created_at: string;
+  }[];
+}
+
 export interface AddThreadsInput {
   session_id: string;
   turn_id: string;
@@ -256,6 +279,12 @@ export interface ISessionStore<
   getSession(input: GetSessionInput): Promise<SessionRecord<TSessionCustom> | undefined>;
 
   /**
+   * Session ids among `ids` owned by `subject_id`. Empty `ids` → `[]`.
+   * Does **not** bump `last_activity_timestamp_ms`.
+   */
+  getOwnedIds(input: GetOwnedIdsInput): Promise<readonly string[]>;
+
+  /**
    * Lookup by tenant-scoped `external_id`. Missing or null external ids are not found.
    * Does **not** bump `last_activity_timestamp_ms` (read path).
    */
@@ -266,6 +295,7 @@ export interface ISessionStore<
    * - agent: replace inline binding (inline sessions only; reference → invariant error).
    * - title: set/replace the session title.
    * - metadata: full replace of the caller-owned string map when set.
+   * - shared: set/replace the share flag when set; omitted leaves the stored value.
    * Bumps `last_activity_timestamp_ms` (= now) in the same update.
    */
   updateSession(input: UpdateSessionInput<TSessionCustom>): Promise<void>;
@@ -347,6 +377,15 @@ export interface ISessionStore<
    * key. `created_at` records event creation time but is not the order key.
    */
   appendToEvents(input: AppendToEventsInput): Promise<void>;
+
+  /**
+   * Durable inbound send-event inbox for a tip. Tip must be non-terminal
+   * (v1: `running`; `paused` when that status lands) — terminal tip →
+   * {@link TurnNotRunningError}. Missing session → {@link SessionNotFoundError};
+   * unknown turn → {@link TurnNotFoundError}. Duplicate `event_id` on that tip →
+   * {@link TurnEventAlreadyExistsError}.
+   */
+  insertTurnInboundEvents(input: InsertTurnInboundEventsInput): Promise<void>;
 
   /** Adds thread snapshots to the turn (sub-agent spawns). */
   addThreads(input: AddThreadsInput): Promise<void>;

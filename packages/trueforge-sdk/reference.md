@@ -1,6 +1,6 @@
 # Reference
-## Agents
-<details><summary><code>client.agents.<a href="/src/api/resources/agents/client/Client.ts">list</a>() -> TrueForge.ListAgentsResponse</code></summary>
+## Internal
+<details><summary><code>client.internal.<a href="/src/api/resources/internal/client/Client.ts">listPermissions</a>({ ...params }) -> TrueForge.ListPermissionsResponse</code></summary>
 <dl>
 <dd>
 
@@ -12,7 +12,7 @@
 <dl>
 <dd>
 
-All configured agents for the tenant.
+Return granted actions for the requested resources.
 </dd>
 </dl>
 </dd>
@@ -27,7 +27,10 @@ All configured agents for the tenant.
 <dd>
 
 ```typescript
-await client.agents.list();
+await client.internal.listPermissions({
+    resourceIds: ["resource_ids"],
+    resourceType: "agent"
+});
 
 ```
 </dd>
@@ -39,6 +42,90 @@ await client.agents.list();
 
 <dl>
 <dd>
+
+<dl>
+<dd>
+
+**request:** `TrueForge.ListPermissionsRequest` 
+    
+</dd>
+</dl>
+
+<dl>
+<dd>
+
+**requestOptions:** `InternalClient.RequestOptions` 
+    
+</dd>
+</dl>
+</dd>
+</dl>
+
+
+</dd>
+</dl>
+</details>
+
+## Agents
+<details><summary><code>client.agents.<a href="/src/api/resources/agents/client/Client.ts">list</a>({ ...params }) -> core.Page&lt;TrueForge.Agent, TrueForge.ListAgentsResponse&gt;</code></summary>
+<dl>
+<dd>
+
+#### 📝 Description
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+List configured agents for the tenant, ordered by name. Optional `agent_name` filters by substring.
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### 🔌 Usage
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+```typescript
+const pageableResponse = await client.agents.list();
+for await (const item of pageableResponse) {
+    console.log(item);
+}
+
+// Or you can manually iterate page-by-page
+let page = await client.agents.list();
+while (page.hasNextPage()) {
+    page = page.getNextPage();
+}
+
+// You can also access the underlying response
+const response = page.response;
+
+```
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### ⚙️ Parameters
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+**request:** `TrueForge.ListAgentsRequest` 
+    
+</dd>
+</dl>
 
 <dl>
 <dd>
@@ -83,6 +170,7 @@ Creates an agent and allocates an immutable id. Fails if `name` is already taken
 
 ```typescript
 await client.agents.create({
+    description: "description",
     manifest: {
         model: {
             name: "name"
@@ -200,7 +288,7 @@ await client.agents.get("agent_id");
 <dl>
 <dd>
 
-Replaces the manifest for an existing agent keyed by immutable `agent_id`.
+Update an existing agent by immutable id.
 </dd>
 </dl>
 </dd>
@@ -840,7 +928,19 @@ List schedules for the tenant, newest first.
 <dd>
 
 ```typescript
-await client.schedules.list();
+const pageableResponse = await client.schedules.list();
+for await (const item of pageableResponse) {
+    console.log(item);
+}
+
+// Or you can manually iterate page-by-page
+let page = await client.schedules.list();
+while (page.hasNextPage()) {
+    page = page.getNextPage();
+}
+
+// You can also access the underlying response
+const response = page.response;
 
 ```
 </dd>
@@ -1241,7 +1341,19 @@ List runs of a schedule, newest `scheduled_for` first. Available to its creator 
 <dd>
 
 ```typescript
-await client.schedules.listRuns("schedule_id");
+const pageableResponse = await client.schedules.listRuns("schedule_id");
+for await (const item of pageableResponse) {
+    console.log(item);
+}
+
+// Or you can manually iterate page-by-page
+let page = await client.schedules.listRuns("schedule_id");
+while (page.hasNextPage()) {
+    page = page.getNextPage();
+}
+
+// You can also access the underlying response
+const response = page.response;
 
 ```
 </dd>
@@ -1313,7 +1425,19 @@ List the sessions (newest first by default).
 <dd>
 
 ```typescript
-await client.sessions.list();
+const pageableResponse = await client.sessions.list();
+for await (const item of pageableResponse) {
+    console.log(item);
+}
+
+// Or you can manually iterate page-by-page
+let page = await client.sessions.list();
+while (page.hasNextPage()) {
+    page = page.getNextPage();
+}
+
+// You can also access the underlying response
+const response = page.response;
 
 ```
 </dd>
@@ -1428,7 +1552,7 @@ await client.sessions.create({
 <dl>
 <dd>
 
-Fetch a session by ID. Only the session creator may fetch it.
+Fetch a session by ID. Allowed for the creator, a manager of the bound named agent, or any tenant member when the session is shared.
 </dd>
 </dl>
 </dd>
@@ -1554,7 +1678,7 @@ await client.sessions.delete("session_id");
 <dl>
 <dd>
 
-Update a session by replacing `agent` with `{ spec: AgentSpec }`. Named (reference) sessions reject agent updates. An empty body is a valid no-op that refreshes `updated_at`. Only the session creator may update it.
+Update a session: optional `title`, `metadata`, `shared`, and (inline sessions only) `agent` as `{ spec: AgentSpec }`. Named sessions reject agent updates. An empty body is a valid no-op that refreshes `updated_at`. Only the session creator may update it.
 </dd>
 </dl>
 </dd>
@@ -1696,7 +1820,7 @@ await client.sessions.cancel("session_id");
 <dl>
 <dd>
 
-List session events as `{ turn_id, event }` across the active turn branch (newest first), including persisted events from a running tip. Each turn contributes turn.created, content events (model.message, tool.call, …), and turn.done when terminal; streaming deltas are not included. Use `page_token` to paginate backward toward older events while retaining the original branch anchor. Only the session creator may list events.
+List session events as `{ turn_id, event }` across the active turn branch (newest first), including persisted events from a running tip. Each turn contributes turn.created, content events (model.message, tool.call, …), and turn.done when terminal; streaming deltas are not included. Use `page_token` to paginate backward toward older events while retaining the original branch anchor. Allowed for the creator, a manager of the bound named agent, or any tenant member when the session is shared.
 </dd>
 </dl>
 </dd>
@@ -1711,7 +1835,19 @@ List session events as `{ turn_id, event }` across the active turn branch (newes
 <dd>
 
 ```typescript
-await client.sessions.listEvents("session_id");
+const pageableResponse = await client.sessions.listEvents("session_id");
+for await (const item of pageableResponse) {
+    console.log(item);
+}
+
+// Or you can manually iterate page-by-page
+let page = await client.sessions.listEvents("session_id");
+while (page.hasNextPage()) {
+    page = page.getNextPage();
+}
+
+// You can also access the underlying response
+const response = page.response;
 
 ```
 </dd>
@@ -1767,7 +1903,7 @@ await client.sessions.listEvents("session_id");
 <dl>
 <dd>
 
-List turns for a session (newest first by default), token-paginated. Only the session creator may list turns.
+List turns for a session (newest first by default), token-paginated. Allowed for the creator, a manager of the bound named agent, or any tenant member when the session is shared.
 </dd>
 </dl>
 </dd>
@@ -1782,7 +1918,19 @@ List turns for a session (newest first by default), token-paginated. Only the se
 <dd>
 
 ```typescript
-await client.sessions.listTurns("session_id");
+const pageableResponse = await client.sessions.listTurns("session_id");
+for await (const item of pageableResponse) {
+    console.log(item);
+}
+
+// Or you can manually iterate page-by-page
+let page = await client.sessions.listTurns("session_id");
+while (page.hasNextPage()) {
+    page = page.getNextPage();
+}
+
+// You can also access the underlying response
+const response = page.response;
 
 ```
 </dd>
@@ -1991,7 +2139,7 @@ await client.sessions.createTurn("session_id", {});
 <dl>
 <dd>
 
-Fetch a single turn by ID. Only the session creator may fetch it.
+Fetch a single turn by ID. Allowed for the creator, a manager of the bound named agent, or any tenant member when the session is shared.
 </dd>
 </dl>
 </dd>
@@ -2143,7 +2291,7 @@ await client.sessions.downloadSandboxFile("session_id", "turn_id", {
 <dl>
 <dd>
 
-Paginated persisted events for a turn (insertion order by default). Only the session creator may list events.
+Paginated persisted events for a turn (insertion order by default). Allowed for the creator, a manager of the bound named agent, or any tenant member when the session is shared.
 </dd>
 </dl>
 </dd>
@@ -2158,7 +2306,19 @@ Paginated persisted events for a turn (insertion order by default). Only the ses
 <dd>
 
 ```typescript
-await client.sessions.listTurnEvents("session_id", "turn_id");
+const pageableResponse = await client.sessions.listTurnEvents("session_id", "turn_id");
+for await (const item of pageableResponse) {
+    console.log(item);
+}
+
+// Or you can manually iterate page-by-page
+let page = await client.sessions.listTurnEvents("session_id", "turn_id");
+while (page.hasNextPage()) {
+    page = page.getNextPage();
+}
+
+// You can also access the underlying response
+const response = page.response;
 
 ```
 </dd>
@@ -2191,6 +2351,89 @@ await client.sessions.listTurnEvents("session_id", "turn_id");
 <dd>
 
 **request:** `TrueForge.ListTurnEventsSessionsRequest` 
+    
+</dd>
+</dl>
+
+<dl>
+<dd>
+
+**requestOptions:** `SessionsClient.RequestOptions` 
+    
+</dd>
+</dl>
+</dd>
+</dl>
+
+
+</dd>
+</dl>
+</details>
+
+<details><summary><code>client.sessions.<a href="/src/api/resources/sessions/client/Client.ts">createTurnEvent</a>(session_id, turn_id, { ...params }) -> TrueForge.CreateTurnEventResponse</code></summary>
+<dl>
+<dd>
+
+#### 📝 Description
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+Create events for a turn. Only the session creator may create them.
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### 🔌 Usage
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+```typescript
+await client.sessions.createTurnEvent("session_id", "turn_id", {
+    events: [{
+            type: "user.mcp_auth_continue"
+        }]
+});
+
+```
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### ⚙️ Parameters
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+**session_id:** `string` — Session identifier.
+    
+</dd>
+</dl>
+
+<dl>
+<dd>
+
+**turn_id:** `string` — Turn identifier.
+    
+</dd>
+</dl>
+
+<dl>
+<dd>
+
+**request:** `TrueForge.CreateTurnEventRequest` 
     
 </dd>
 </dl>
@@ -2332,6 +2575,71 @@ await client.skills.list();
 
 <dl>
 <dd>
+
+<dl>
+<dd>
+
+**requestOptions:** `SkillsClient.RequestOptions` 
+    
+</dd>
+</dl>
+</dd>
+</dl>
+
+
+</dd>
+</dl>
+</details>
+
+<details><summary><code>client.skills.<a href="/src/api/resources/skills/client/Client.ts">listVersions</a>({ ...params }) -> TrueForge.ListSkillVersionsResponse</code></summary>
+<dl>
+<dd>
+
+#### 📝 Description
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+Versions for one skill.
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### 🔌 Usage
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+```typescript
+await client.skills.listVersions({
+    name: "name"
+});
+
+```
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### ⚙️ Parameters
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+**request:** `TrueForge.ListVersionsSkillsRequest` 
+    
+</dd>
+</dl>
 
 <dl>
 <dd>
@@ -2572,6 +2880,62 @@ await client.catalogs.skills.list();
 </dl>
 </details>
 
+## Catalogs WebSearchProviders
+<details><summary><code>client.catalogs.webSearchProviders.<a href="/src/api/resources/catalogs/resources/webSearchProviders/client/Client.ts">list</a>() -> TrueForge.GetWebSearchProviderCatalogResponse</code></summary>
+<dl>
+<dd>
+
+#### 📝 Description
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+Shipped web-search provider presets.
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### 🔌 Usage
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+```typescript
+await client.catalogs.webSearchProviders.list();
+
+```
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### ⚙️ Parameters
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+**requestOptions:** `WebSearchProvidersClient.RequestOptions` 
+    
+</dd>
+</dl>
+</dd>
+</dl>
+
+
+</dd>
+</dl>
+</details>
+
 ## Internal Metrics
 <details><summary><code>client.internal.metrics.<a href="/src/api/resources/internal/resources/metrics/client/Client.ts">listCharts</a>() -> TrueForge.GetSessionMetricsChartResponse</code></summary>
 <dl>
@@ -2763,6 +3127,72 @@ await client.internal.metrics.getMeters({
 </dl>
 </details>
 
+## Internal Schedules
+<details><summary><code>client.internal.schedules.<a href="/src/api/resources/internal/resources/schedules/client/Client.ts">executeRun</a>({ ...params }) -> void</code></summary>
+<dl>
+<dd>
+
+#### 📝 Description
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+Execute a persisted schedule run using its saved schedule and agent.
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### 🔌 Usage
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+```typescript
+await client.internal.schedules.executeRun({
+    scheduleRunId: "schedule_run_id"
+});
+
+```
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### ⚙️ Parameters
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+**request:** `TrueForge.internal.ExecuteScheduleRunRequest` 
+    
+</dd>
+</dl>
+
+<dl>
+<dd>
+
+**requestOptions:** `SchedulesClient.RequestOptions` 
+    
+</dd>
+</dl>
+</dd>
+</dl>
+
+
+</dd>
+</dl>
+</details>
+
 ## Internal Sessions
 <details><summary><code>client.internal.sessions.<a href="/src/api/resources/internal/resources/sessions/client/Client.ts">getOrCreateByExternalId</a>({ ...params }) -> TrueForge.GetSessionResponse</code></summary>
 <dl>
@@ -2833,7 +3263,7 @@ await client.internal.sessions.getOrCreateByExternalId({
 </details>
 
 ## Internal Agents
-<details><summary><code>client.internal.agents.<a href="/src/api/resources/internal/resources/agents/client/Client.ts">getCodeSnippets</a>(agent_id) -> TrueForge.GetAgentCodeSnippetsResponse</code></summary>
+<details><summary><code>client.internal.agents.<a href="/src/api/resources/internal/resources/agents/client/Client.ts">getCodeSnippets</a>(agent_id, { ...params }) -> TrueForge.GetAgentCodeSnippetsResponse</code></summary>
 <dl>
 <dd>
 
@@ -2845,7 +3275,7 @@ await client.internal.sessions.getOrCreateByExternalId({
 <dl>
 <dd>
 
-TypeScript TrueForge SDK samples (stream and non-stream) for creating a session and turn against this agent.
+TrueForge SDK samples (TypeScript and Python, stream and non-stream) for a session and turn against this agent.
 </dd>
 </dl>
 </dd>
@@ -2877,6 +3307,14 @@ await client.internal.agents.getCodeSnippets("agent_id");
 <dd>
 
 **agent_id:** `string` — Immutable agent identifier.
+    
+</dd>
+</dl>
+
+<dl>
+<dd>
+
+**request:** `TrueForge.internal.GetCodeSnippetsAgentsRequest` 
     
 </dd>
 </dl>
@@ -3678,6 +4116,132 @@ await client.settings.skills.createOrUpdate({
 <dd>
 
 **requestOptions:** `SkillsClient.RequestOptions` 
+    
+</dd>
+</dl>
+</dd>
+</dl>
+
+
+</dd>
+</dl>
+</details>
+
+## Settings WebSearchProviders
+<details><summary><code>client.settings.webSearchProviders.<a href="/src/api/resources/settings/resources/webSearchProviders/client/Client.ts">get</a>() -> TrueForge.GetWebSearchProviderResponse</code></summary>
+<dl>
+<dd>
+
+#### 📝 Description
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+The configured provider for this tenant. `auth.api_key` is redacted when present.
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### 🔌 Usage
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+```typescript
+await client.settings.webSearchProviders.get();
+
+```
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### ⚙️ Parameters
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+**requestOptions:** `WebSearchProvidersClient.RequestOptions` 
+    
+</dd>
+</dl>
+</dd>
+</dl>
+
+
+</dd>
+</dl>
+</details>
+
+<details><summary><code>client.settings.webSearchProviders.<a href="/src/api/resources/settings/resources/webSearchProviders/client/Client.ts">createOrUpdate</a>({ ...params }) -> TrueForge.GetWebSearchProviderResponse</code></summary>
+<dl>
+<dd>
+
+#### 📝 Description
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+Upserts the single web search provider for this tenant. `auth.api_key`: real value sets/rotates; redacted keeps existing (400 if none).
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### 🔌 Usage
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+```typescript
+await client.settings.webSearchProviders.createOrUpdate({
+    manifest: {
+        auth: {
+            apiKey: "api_key"
+        },
+        type: "parallel"
+    }
+});
+
+```
+</dd>
+</dl>
+</dd>
+</dl>
+
+#### ⚙️ Parameters
+
+<dl>
+<dd>
+
+<dl>
+<dd>
+
+**request:** `TrueForge.settings.UpdateWebSearchProviderRequest` 
+    
+</dd>
+</dl>
+
+<dl>
+<dd>
+
+**requestOptions:** `WebSearchProvidersClient.RequestOptions` 
     
 </dd>
 </dl>

@@ -9,6 +9,7 @@ import type {
   SessionMetadata,
   SessionMetrics,
   SessionSource,
+  TurnInboundEventItem,
   TurnInputItem,
   TurnState,
 } from '@truefoundry/trueforge-core/agent-session';
@@ -26,12 +27,19 @@ import type { ColumnType, Generated, JSONColumnType } from 'kysely';
 import type { McpServerManifest } from '../../schemas/mcpServer';
 import type { ModelProviderManifest } from '../../schemas/modelProvider';
 import type {
+  SandboxEnvironmentLifecycleStage,
+  SandboxEnvironmentVersionInternalMetadata,
+  SandboxEnvironmentVersionStatus,
+  StoredSandboxEnvironmentManifest,
+} from '../../schemas/sandboxEnvironment';
+import type {
   SandboxBuildMetadata,
   SandboxBuildStatus,
   StoredSandboxProviderManifest,
 } from '../../schemas/sandboxProvider';
 import type { ScheduleManifest, ScheduleRunStatus, ScheduleStatus } from '../../schemas/schedule';
 import type { SkillManifest } from '../../schemas/skill';
+import type { WebSearchProviderManifest } from '../../schemas/webSearchProvider';
 import type { OAuthClient, OAuthPendingAuthorizationData, OAuthServer, OAuthToken } from '../mcpServerStore';
 
 /**
@@ -85,6 +93,8 @@ export interface SessionTable {
    *      (COALESCE) targets it directly
    */
   title: string | null;
+  /** When true, any subject in the tenant may GET this session. */
+  shared: boolean;
   /**
    * top: HOT — bumped once per createTurn under the session lock;
    *      tiny fixed-width column keeps the bump a cheap HOT update
@@ -128,6 +138,8 @@ export interface TurnTable {
    *      (spill through older turns); typed array
    */
   ancestor_ids: string[];
+  /** top: replica currently owning the in-memory ActiveTurn */
+  active_executor_id: string;
   /** top: big + written once at create; TOAST pointer stable after */
   // Insert arrays/objects via json() helper (bare JS arrays become PG arrays via node-pg).
   input: JSONColumnType<TurnInputItem[], TurnInputItem[] | string, TurnInputItem[] | string>;
@@ -248,6 +260,19 @@ export interface SessionEventTable {
 }
 
 /**
+ * Turn-scoped inbound send-event inbox.
+ * PRIMARY KEY (session_id, turn_id, event_id).
+ */
+export interface TurnInboundEventsTable {
+  session_id: string;
+  turn_id: string;
+  event_id: string;
+  payload: JSONColumnType<TurnInboundEventItem, TurnInboundEventItem, TurnInboundEventItem>;
+  consumed: boolean;
+  created_at: Date;
+}
+
+/**
  * pure immutable CONTENT; no state → no checkpoint field
  * PRIMARY KEY (session_id, thread_id, append_id)
  * pure INSERT → default fillfactor 100, zero dead tuples;
@@ -340,6 +365,17 @@ export interface ModelProviderTable {
 }
 
 /**
+ * Configured web-search provider — mirrors the Postgres `web_search_provider` table.
+ * PRIMARY KEY (tenant_id)
+ */
+export interface WebSearchProviderTable {
+  tenant_id: string;
+  manifest: JSONColumnType<WebSearchProviderManifest, WebSearchProviderManifest, WebSearchProviderManifest>;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
  * Configured skills — mirrors the Postgres `skill` table.
  * PRIMARY KEY (tenant_id, name)
  */
@@ -383,9 +419,52 @@ export interface AgentTable {
   tenant_id: string;
   /** immutable natural uniqueness target within a tenant */
   name: string;
+  description: string;
   /** AgentSpec document; replaced whole on every upsert */
   manifest: JSONColumnType<AgentSpec, AgentSpec, AgentSpec>;
   external_id: string | null;
+  created_by_subject: JSONColumnType<CreatedBySubject, CreatedBySubject, CreatedBySubject>;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
+ * Sandbox environments — immutable ULID `id` PK.
+ * Partial unique (tenant_id, name) WHERE lifecycle_stage = 'active'.
+ */
+export interface SandboxEnvironmentTable {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string;
+  active_version: number;
+  lifecycle_stage: SandboxEnvironmentLifecycleStage;
+  created_by_subject: JSONColumnType<CreatedBySubject, CreatedBySubject, CreatedBySubject>;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
+ * Immutable sandbox environment versions.
+ * UNIQUE (environment_id, version); FK → sandbox_environment ON DELETE CASCADE.
+ */
+export interface SandboxEnvironmentVersionTable {
+  id: string;
+  environment_id: string;
+  version: number;
+  manifest: JSONColumnType<
+    StoredSandboxEnvironmentManifest,
+    StoredSandboxEnvironmentManifest,
+    StoredSandboxEnvironmentManifest
+  >;
+  status: SandboxEnvironmentVersionStatus;
+  status_reason: string | null;
+  external_ref: string;
+  internal_metadata: JSONColumnType<
+    SandboxEnvironmentVersionInternalMetadata,
+    SandboxEnvironmentVersionInternalMetadata,
+    SandboxEnvironmentVersionInternalMetadata
+  >;
   created_by_subject: JSONColumnType<CreatedBySubject, CreatedBySubject, CreatedBySubject>;
   created_at: Date;
   updated_at: Date;
@@ -517,12 +596,16 @@ export interface Database {
   turn: TurnTable;
   turn_thread: TurnThreadTable;
   session_event: SessionEventTable;
+  turn_inbound_events: TurnInboundEventsTable;
   thread_context_log: ThreadContextLogTable;
   thread_capability_state: ThreadCapabilityStateTable;
   model_provider: ModelProviderTable;
+  web_search_provider: WebSearchProviderTable;
   skill: SkillTable;
   sandbox_provider: SandboxProviderTable;
   agent: AgentTable;
+  sandbox_environment: SandboxEnvironmentTable;
+  sandbox_environment_version: SandboxEnvironmentVersionTable;
   schedule: ScheduleTable;
   schedule_run: ScheduleRunTable;
   mcp_server: McpServerTable;

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPath,
   buildSessionResumeHref,
+  buildSharedSessionHref,
   matchLocation,
   matchPath,
   placesEqual,
@@ -19,8 +20,10 @@ describe('resolveRoutesConfig', () => {
       library: '/library',
       libraryAgent: '/library/:agentId',
       schedules: '/schedules',
+      buildAgent: '/build-agent',
       agent: '/agents/:agentName',
       session: '/sessions/:sessionId',
+      sharedSession: '/sessions/share/:sessionId',
       sessionsBrowser: '/sessions',
     });
   });
@@ -35,6 +38,7 @@ describe('resolveRoutesConfig', () => {
     expect(resolved.settings).toBeNull();
     expect(resolved.agent).toBe('/a/:agentName');
     expect(resolved.session).toBe('/sessions/:sessionId');
+    expect(resolved.sharedSession).toBe('/sessions/share/:sessionId');
   });
 
   it('normalizes trailing slashes but keeps root', () => {
@@ -53,8 +57,10 @@ describe('buildPath', () => {
     expect(buildPath({ type: 'library' }, routes)).toBe('/library');
     expect(buildPath({ type: 'libraryAgent', agentId: 'agent/id' }, routes)).toBe('/library/agent%2Fid');
     expect(buildPath({ type: 'schedules' }, routes)).toBe('/schedules');
+    expect(buildPath({ type: 'buildAgent' }, routes)).toBe('/build-agent');
     expect(buildPath({ type: 'agent', agentName: 'code-helper' }, routes)).toBe('/agents/code-helper');
     expect(buildPath({ type: 'session', sessionId: 'abc123' }, routes)).toBe('/sessions/abc123');
+    expect(buildPath({ type: 'sharedSession', sessionId: 'abc123' }, routes)).toBe('/sessions/share/abc123');
     expect(buildPath({ type: 'sessionsBrowser' }, routes)).toBe('/sessions');
   });
 
@@ -82,6 +88,24 @@ describe('buildPath', () => {
       }),
     ).toBe('https://app.example/trueforge/sessions/sess-1?theme=dark');
   });
+
+  it('builds routed and query-fallback shared-session hrefs', () => {
+    const withBasename = resolveRoutesConfig({ basename: '/trueforge' });
+    expect(
+      buildSharedSessionHref({
+        sessionId: 'sess/1',
+        routes: withBasename,
+        href: 'https://app.example/trueforge/sessions?view=sessions&theme=dark',
+      }),
+    ).toBe('https://app.example/trueforge/sessions/share/sess%2F1?theme=dark');
+    expect(
+      buildSharedSessionHref({
+        sessionId: 'sess-1',
+        routes: null,
+        href: 'https://app.example/embed?view=sessions&agentId=agent-1&s_tw=30&theme=dark',
+      }),
+    ).toBe('https://app.example/embed?view=shared-session&theme=dark&sessionId=sess-1');
+  });
 });
 
 describe('sanitizeSearchForPlace', () => {
@@ -91,6 +115,7 @@ describe('sanitizeSearchForPlace', () => {
     expect(sanitizeSearchForPlace({ type: 'library' }, sessionSearch)).toBe('?theme=dark');
     expect(sanitizeSearchForPlace({ type: 'root' }, sessionSearch)).toBe('?theme=dark');
     expect(sanitizeSearchForPlace({ type: 'session', sessionId: 'sess-2' }, sessionSearch)).toBe('?theme=dark');
+    expect(sanitizeSearchForPlace({ type: 'sharedSession', sessionId: 'sess-2' }, sessionSearch)).toBe('?theme=dark');
   });
 
   it('keeps only the query state owned by the destination place', () => {
@@ -131,9 +156,11 @@ describe('matchPath', () => {
     expect(matchPath('/library', routes)).toEqual({ type: 'library' });
     expect(matchPath('/library/agent%2Fid', routes)).toEqual({ type: 'libraryAgent', agentId: 'agent/id' });
     expect(matchPath('/schedules', routes)).toEqual({ type: 'schedules' });
+    expect(matchPath('/build-agent', routes)).toEqual({ type: 'buildAgent' });
     expect(matchPath('/agents/a%2Fb', routes)).toEqual({ type: 'agent', agentName: 'a/b' });
     expect(matchPath('/sessions', routes)).toEqual({ type: 'sessionsBrowser' });
     expect(matchPath('/sessions/xyz', routes)).toEqual({ type: 'session', sessionId: 'xyz' });
+    expect(matchPath('/sessions/share/xyz', routes)).toEqual({ type: 'sharedSession', sessionId: 'xyz' });
   });
 
   it('returns null for unknown paths', () => {
@@ -160,8 +187,10 @@ describe('matchPath', () => {
       { type: 'library' as const },
       { type: 'libraryAgent' as const, agentId: 'agent id/1' },
       { type: 'schedules' as const },
+      { type: 'buildAgent' as const },
       { type: 'agent' as const, agentName: 'weird name/1' },
       { type: 'session' as const, sessionId: 'sess 9' },
+      { type: 'sharedSession' as const, sessionId: 'sess 9' },
       { type: 'sessionsBrowser' as const },
     ]) {
       const path = buildPath(place, routes);
@@ -190,6 +219,16 @@ describe('matchLocation', () => {
       type: 'sessionsBrowser',
     });
   });
+
+  it('opens a shared session from the no-router query form on the root path', () => {
+    expect(
+      matchLocation({
+        pathname: '/',
+        search: '?view=shared-session&sessionId=sess-1',
+        routes,
+      }),
+    ).toEqual({ type: 'sharedSession', sessionId: 'sess-1' });
+  });
 });
 
 describe('placesEqual', () => {
@@ -199,5 +238,8 @@ describe('placesEqual', () => {
     expect(placesEqual({ type: 'agent', agentName: 'a' }, { type: 'agent', agentName: 'b' })).toBe(false);
     expect(placesEqual({ type: 'libraryAgent', agentId: 'a' }, { type: 'libraryAgent', agentId: 'a' })).toBe(true);
     expect(placesEqual({ type: 'session', sessionId: '1' }, { type: 'root' })).toBe(false);
+    expect(placesEqual({ type: 'sharedSession', sessionId: '1' }, { type: 'sharedSession', sessionId: '1' })).toBe(
+      true,
+    );
   });
 });

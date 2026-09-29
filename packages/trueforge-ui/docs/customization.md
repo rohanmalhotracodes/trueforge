@@ -65,7 +65,7 @@ Public override surface (primitives stay theme/CSS — not slots):
 - **Thread list:** `ThreadListShell`, `ThreadListNewButton`, `ThreadListRow`,
   `ThreadListRowSkeleton`, `ThreadListEmptyState`, `HistoryLoader`,
   `AgentsLibrary`, `AgentsLibraryButton`, `SessionsBrowserButton`,
-  `SaveAgentButton`, `SelectAgentEmptyState`, `ClearChatButton`
+  `SaveAgentButton`, `SelectAgentEmptyState`, `ClearChatButton`, `ShareChatButton`
 - **Agent details / sessions:** `AgentDetailsPage`, `AgentDetailsHeader`,
   `AgentDetailsTabs`, `AgentDetailsUnavailable`, `AgentOverview`,
   `AgentOverviewCard`, `AgentSessions`, `AgentSessionsFilters`, `SessionsPage`,
@@ -96,9 +96,11 @@ router should leave it off (the default).
 Places mirrored to the URL:
 
 - `/` — new chat / library landing (mode-dependent)
+- `/build-agent` — new agent builder
 - `/agents/:agentName` — immutable "Try" of a library agent
 - `/sessions` — all-user Sessions browser (named agents and drafts)
 - `/sessions/:sessionId` — a specific chat session
+- `/sessions/share/:sessionId` — detail-only session view without the Sessions list or filters
 - `/settings` — settings overlay (closing navigates to the chat place below it)
 - `/library` — Agents
 - `/library/:agentId` — agent details. `?tab=overview|sessions|code|metrics` selects the tab (default Overview);
@@ -113,7 +115,13 @@ to keep that place overlay-only with no URL:
   withRouter
   routes={{
     basename: '/app',
-    paths: { session: '/chats/:sessionId', libraryAgent: '/library/:agentId', settings: false },
+    paths: {
+      buildAgent: '/new-agent',
+      session: '/chats/:sessionId',
+      sharedSession: '/sessions/share/:sessionId',
+      libraryAgent: '/library/:agentId',
+      settings: false,
+    },
   }}
 />
 ```
@@ -140,8 +148,20 @@ Notes on behaviour:
   (`agentId`, `s_tw` for a relative window, or `s_sts`/`s_ets` for an absolute
   range). Opening a session pins `s_sts`/`s_ets` around `created_at` (±5 min)
   so a refresh still finds that row on page 1 without scrolling the list.
+- A detail-only shared session is `/sessions/share/:sessionId` when
+  `withRouter` is on. Without SDK routing, the same view uses
+  `?view=shared-session&sessionId=:sessionId` on the host page.
 - A `/sessions/:sessionId` link is resolved through `getSession` so the chat
   opens with its own agent binding and mutability rather than as a new draft.
+- `/build-agent` is used for a fresh builder; after its draft session persists,
+  the URL transitions to `/sessions/:sessionId`.
+- Agent-filtered chat history keeps one intent key in the query string:
+  `try_agent_name` hides the filter for a Try Agent flow, while
+  `history_agent_name` shows an explicitly selected filter. Both values are
+  display names; the shell resolves the backend agent id before listing sessions.
+  Non-chat destinations such as Build Agent, Agents, Sessions, Schedules, and
+  Settings clear this query state. User filter changes start a clean chat and
+  reset history pagination; All Chats remains paginated in 20-session pages.
 - Unrecognized paths (and malformed escapes) normalize to the root place.
 - `/settings` is registered only while Settings chrome is available (catalog
   present and `capabilities.settings.enabled !== false`). When that gate is

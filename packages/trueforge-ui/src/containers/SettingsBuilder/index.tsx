@@ -17,6 +17,7 @@ const ModelSettings = lazy(() => import('./ModelSettings.js'));
 const ConnectorSettings = lazy(() => import('./ConnectorSettings.js'));
 const SkillSettings = lazy(() => import('./SkillSettings.js'));
 const SandboxSettings = lazy(() => import('./SandboxSettings.js'));
+const WebSearchSettings = lazy(() => import('./WebSearchSettings.js'));
 
 function SettingsSectionFallback() {
   return (
@@ -36,6 +37,7 @@ const TruefoundrySettingsBuilder = () => {
   const compact = useCompactLayout();
   const hasSkills = catalog?.skillCatalog != null;
   const hasSandbox = catalog?.sandboxCatalog != null;
+  const hasWebSearch = catalog?.webSearchCatalog != null;
 
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
@@ -57,7 +59,10 @@ const TruefoundrySettingsBuilder = () => {
     if (!hasSandbox && section === 'sandbox') {
       setSettingsOpen(settingsOpen, 'models');
     }
-  }, [hasSkills, hasSandbox, section, settingsOpen, setSettingsOpen]);
+    if (!hasWebSearch && section === 'web-search') {
+      setSettingsOpen(settingsOpen, 'models');
+    }
+  }, [hasSkills, hasSandbox, hasWebSearch, section, settingsOpen, setSettingsOpen]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -75,13 +80,13 @@ const TruefoundrySettingsBuilder = () => {
     Array<{
       id: SettingsSection;
       label: string;
-      icon: 'cpu' | 'plug' | 'lightbulb' | 'cube';
+      icon: 'cpu' | 'plug' | 'lightbulb' | 'cube' | 'search';
     }>
   >(() => {
     const baseSections: Array<{
       id: SettingsSection;
       label: string;
-      icon: 'cpu' | 'plug' | 'lightbulb' | 'cube';
+      icon: 'cpu' | 'plug' | 'lightbulb' | 'cube' | 'search';
     }> = [
       { id: 'models', label: 'Models', icon: 'cpu' },
       { id: 'connectors', label: 'Connectors', icon: 'plug' },
@@ -92,8 +97,11 @@ const TruefoundrySettingsBuilder = () => {
     if (hasSandbox) {
       baseSections.push({ id: 'sandbox', label: 'Sandbox providers', icon: 'cube' });
     }
+    if (hasWebSearch) {
+      baseSections.push({ id: 'web-search', label: 'Web search', icon: 'search' });
+    }
     return baseSections;
-  }, [hasSkills, hasSandbox]);
+  }, [hasSkills, hasSandbox, hasWebSearch]);
 
   if (!settingsOpen || !catalog) return null;
 
@@ -134,7 +142,7 @@ const TruefoundrySettingsBuilder = () => {
                 // Narrow panels cannot fit fixed-width tabs, so tabs split the row instead.
                 compact ? 'min-w-0 flex-1 justify-center gap-1.5 px-1.5' : 'shrink-0',
                 section === item.id
-                  ? 'bg-primary-button-bg text-primary-button-text'
+                  ? 'bg-primary-button-bg/10 text-primary-button-bg'
                   : 'text-text-secondary hover:bg-ghost-button-hover/60 hover:text-text-primary',
               )}
               onClick={() => {
@@ -154,6 +162,7 @@ const TruefoundrySettingsBuilder = () => {
               {section === 'connectors' ? <ConnectorSettings /> : null}
               {section === 'skills' && hasSkills ? <SkillSettings /> : null}
               {section === 'sandbox' && hasSandbox ? <SandboxSettings /> : null}
+              {section === 'web-search' && hasWebSearch ? <WebSearchSettings /> : null}
             </Suspense>
           </div>
         </section>

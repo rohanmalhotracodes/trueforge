@@ -30,6 +30,8 @@ export type {
   ThemePreset,
 } from './theme/types.js';
 
+export { PermissionGuard } from './atoms/PermissionGuard.js';
+export type { PermissionGuardProps } from './atoms/PermissionGuard.js';
 export { BottomSheet } from './atoms/primitives/BottomSheet.js';
 export type { BottomSheetProps } from './atoms/primitives/BottomSheet.js';
 export { Button } from './atoms/primitives/Button.js';
@@ -106,6 +108,7 @@ export { MessageTimestamp } from './atoms/MessageTimestamp.js';
 export type { MessageTimestampProps } from './atoms/MessageTimestamp.js';
 export { MonacoEditorCore } from './atoms/MonacoEditorCore.js';
 export type { MonacoEditorCoreProps } from './atoms/MonacoEditorCore.js';
+export { preloadMonaco } from './atoms/monacoPreload.js';
 export { OpenUiFenceBlock } from './atoms/OpenUiFenceBlock.js';
 export type { OpenUiFenceBlockProps } from './atoms/OpenUiFenceBlock.js';
 export { SandboxArtifactDownload } from './atoms/SandboxArtifactDownload.js';
@@ -123,6 +126,8 @@ export type {
   ThreadRootShellProps,
   ThreadViewportShellProps,
 } from './atoms/ThreadShell.js';
+export { UserAvatar } from './atoms/UserAvatar.js';
+export type { UserAvatarProps } from './atoms/UserAvatar.js';
 export { UserMessageActionBar } from './atoms/UserMessageActionBar.js';
 export type { UserMessageActionBarProps } from './atoms/UserMessageActionBar.js';
 export { UserMessageBubble } from './atoms/UserMessageBubble.js';
@@ -222,6 +227,8 @@ export { ToolCallContainer } from './containers/ToolCallContainer.js';
 export { ToolCallContentBlockContainer } from './containers/ToolCallContentBlockContainer.js';
 export { ToolGroupContainer } from './containers/ToolGroupContainer.js';
 export type { ThreadGroupPart } from './containers/ToolGroupContainer.js';
+export { TrueForgeChatProvider } from './containers/TrueForgeChatProvider.js';
+export type { TrueForgeChatProviderProps } from './containers/TrueForgeChatProvider.js';
 export { TrueForgeUI } from './containers/TrueForgeUI.js';
 export type {
   ChatLayout,
@@ -231,46 +238,50 @@ export type {
   TrueForgeServerConfig,
   TrueForgeUIProps,
 } from './containers/TrueForgeUI.js';
-export { TrueFoundryChatProvider } from './containers/TrueFoundryChatProvider.js';
-export type { TrueFoundryChatProviderProps } from './containers/TrueFoundryChatProvider.js';
 export { UserEditComposerContainer } from './containers/UserEditComposerContainer.js';
 export { UserMessageContainer } from './containers/UserMessageContainer.js';
 export { useApprovalNav } from './hooks/useApprovalNav.js';
 export type { ApprovalNavState } from './hooks/useApprovalNav.js';
+export { useCanCreateAgent } from './hooks/useCanCreateAgent.js';
+export type { UseCanCreateAgentResult } from './hooks/useCanCreateAgent.js';
 export { ComposerBusyProvider, useComposerBusyState } from './hooks/useComposerBusyState.js';
 export type { ComposerBusyState } from './hooks/useComposerBusyState.js';
 export { threadHasPendingMcpAuth, useComposerPauseView } from './hooks/useComposerPauseView.js';
 export type { ComposerPauseView, ThreadPauseState } from './hooks/useComposerPauseView.js';
 export { MCP_AUTH_POPUP_CHANNEL, useMCPAuth } from './hooks/useMcpAuth.js';
 export type { McpAuthCallback, McpAuthPopupMessage, UseMCPAuthOptions } from './hooks/useMcpAuth.js';
+export { useResourcePermissions } from './hooks/useResourcePermissions.js';
+export type { UseResourcePermissionsOptions, UseResourcePermissionsResult } from './hooks/useResourcePermissions.js';
 
 // Curated chrome hooks (same instance as the SDK runtime). Deep primitives: install @assistant-ui/react.
 export { useAui, useAuiState } from './assistant-ui.js';
 export type { AssistantState } from './assistant-ui.js';
+export { useOptionalCurrentUser } from './contexts/CurrentUserContext.js';
+export type { CurrentUser } from './contexts/CurrentUserContext.js';
 export { useTheme } from './theme/useTheme.js';
 
 // Runtime / server — consumer surface.
 export {
   mergeAgentSpec,
-  trueFoundryAttachmentAdapter,
-  useTrueFoundryAgentRuntime,
-  useTrueFoundryAgentSpec,
-  useTrueFoundryApprovals,
-  useTrueFoundryCancel,
-  useTrueFoundryDownloadSandboxFile,
-  useTrueFoundryHistoryPagination,
-  useTrueFoundryMcpAuth,
-  useTrueFoundryRespondToToolApproval,
-  useTrueFoundryToolResponses,
-  useTrueFoundryTurnId,
-  useTrueFoundryUpdateAgentSpec,
-} from '@truefoundry/assistant-ui-runtime';
+  trueForgeAttachmentAdapter,
+  useTrueForgeAgentRuntime,
+  useTrueForgeAgentSpec,
+  useTrueForgeApprovals,
+  useTrueForgeCancel,
+  useTrueForgeDownloadSandboxFile,
+  useTrueForgeHistoryPagination,
+  useTrueForgeMcpAuth,
+  useTrueForgeRespondToToolApproval,
+  useTrueForgeToolResponses,
+  useTrueForgeTurnId,
+  useTrueForgeUpdateAgentSpec,
+} from '@truefoundry/trueforge-assistant-ui-runtime';
 export type {
   DraftAgentConfig,
   NamedAgentConfig,
-  TrueFoundryAgentConfig,
-  UseTrueFoundryAgentRuntimeOptions,
-} from '@truefoundry/assistant-ui-runtime';
+  TrueForgeAgentConfig,
+  UseTrueForgeAgentRuntimeOptions,
+} from '@truefoundry/trueforge-assistant-ui-runtime';
 
 // Server port types + factory
 export { ClearChatButton } from './atoms/ClearChatButton.js';
@@ -281,9 +292,12 @@ export {
   sessionIsCreateAgent,
 } from './atoms/lib/sessionCreateAgent.js';
 export { SelectAgentEmptyState } from './atoms/SelectAgentEmptyState.js';
+export { ShareChatButton } from './atoms/ShareChatButton.js';
+export { ShareSessionDialog } from './atoms/ShareSessionDialog.js';
+export type { ShareSessionDialogProps } from './atoms/ShareSessionDialog.js';
 export { ShellActionsActionSlot } from './atoms/ShellActionsActionSlot.js';
-export { createTrueFoundryServer } from './server/createTrueFoundryServer.js';
-export type { CreateTrueFoundryServerOptions, TrueFoundryServer } from './server/createTrueFoundryServer.js';
+export { createTrueForgeServer } from './server/createTrueForgeServer.js';
+export type { CreateTrueForgeServerOptions, TrueForgeServer } from './server/createTrueForgeServer.js';
 export {
   CustomActionRenderersProvider,
   useOptionalCustomActionRenderers,
@@ -297,6 +311,7 @@ export {
   useOptionalAgentMetricsServer,
   useOptionalAgentSessionsServer,
   useOptionalCatalogServer,
+  useOptionalPermissionsServer,
   useOptionalScheduleServer,
   useOptionalServer,
   useScheduleServer,
@@ -359,9 +374,13 @@ export type {
   CreateSessionRequest,
   CreateSkillRequest,
   CreateSkillRequestBase,
+  CreateWebSearchProviderRequest,
+  CreatedBySubject,
   DefinedSkill,
   GithubSkill,
   ImportGithubSkillRequest,
+  ListPermissionsRequest,
+  ListPermissionsResponse,
   ListResult,
   ListSessionEventsParams,
   ListSessionsOrder,
@@ -378,14 +397,16 @@ export type {
   ModelSelection,
   ModelSelectorEntry,
   PageParams,
+  PermissionResourceType,
+  PermissionsServer,
   PreviousTurnIdInput,
   ProviderEntry,
   ProviderType,
   RegistrySkill,
+  ResourcePermission,
   SandboxCatalogServer,
   SandboxProviderBase,
   SandboxProviderCatalogEntry,
-  SandboxProviderConfig,
   SandboxProviderListEntry,
   SandboxSnapshotSyncStatus,
   SaveAgentRequest,
@@ -412,10 +433,14 @@ export type {
   UpdateModelProviderRequest,
   UpdateSandboxProviderRequest,
   UpdateSessionRequest,
+  UpdateWebSearchProviderRequest,
   UserMessage,
   UserMessageContent,
   UserToolApprovalEvent,
   UserToolResponseEvent,
+  WebSearchCatalogServer,
+  WebSearchProviderBase,
+  WebSearchProviderCatalogEntry,
 } from './server/types.js';
 
 export { AgentCodeBlock } from './atoms/agent-details/AgentCodeBlock.js';
@@ -426,7 +451,7 @@ export { AgentDetailsUnavailable } from './atoms/agent-details/AgentDetailsUnava
 export { AgentMetricCard } from './atoms/agent-details/AgentMetricCard.js';
 export { AgentMetricChart } from './atoms/agent-details/AgentMetricChart.js';
 export { AgentMetricsTimeRangeFilter } from './atoms/agent-details/AgentMetricsTimeRangeFilter.js';
-export { AgentMetricsView } from './atoms/agent-details/AgentMetricsView.js';
+export { AgentMetricStatistics, AgentMetricsView } from './atoms/agent-details/AgentMetricsView.js';
 export { AgentOverviewCard } from './atoms/agent-details/AgentOverviewCard.js';
 export type {
   AgentCodeBlockProps,
@@ -439,6 +464,7 @@ export type {
   AgentMetricCardProps,
   AgentMetricChartProps,
   AgentMetricChartResult,
+  AgentMetricStatisticsProps,
   AgentMetricsProps,
   AgentMetricsTimeRangeFilterProps,
   AgentMetricsViewProps,
@@ -453,6 +479,7 @@ export type {
   AgentSessionsProps,
 } from './atoms/agent-details/types.js';
 export { AgentMetricsContainer } from './containers/AgentMetricsContainer.js';
+export type { DaytonaSandboxConfig } from './plugins/trueforge-agent-server-adapter/catalogs/sandboxProviderCatalog.js';
 export type { SessionEventTimelineSegment, SessionEventType } from './utils/sessionEventTimeline.js';
 export type { SessionTurnView } from './utils/sessionTurnViews.js';
 

@@ -1,8 +1,10 @@
 'use client';
 
+import { useResourcePermissions } from '../../hooks/useResourcePermissions.js';
 import { Icon } from '../../icons/Icon.js';
 import { useOptionalServer } from '../../server/ServerContext.js';
 import { useShellMode } from '../../server/ShellModeContext.js';
+import { useSlot } from '../../theme/SlotsProvider.js';
 import { AgentOverflowMenu } from '../AgentOverflowMenu.js';
 import { auiButtonClass } from '../lib/buttonClasses.js';
 import { cn } from '../lib/cn.js';
@@ -13,10 +15,15 @@ import type { AgentDetailsHeaderProps } from './types.js';
 export function AgentDetailsHeader({ agentId, detail, onBack }: AgentDetailsHeaderProps) {
   const shell = useShellMode();
   const builder = useOptionalServer();
+  const { allows } = useResourcePermissions({ resourceType: 'agent', resourceIds: [agentId] });
   const canMutate = shell.isComposerEnabled && detail != null && builder != null;
+  const canUse = allows(agentId, 'USE');
+  const canManage = allows(agentId, 'MANAGE');
+  const canDelete = allows(agentId, 'DELETE');
+  const PermissionGuard = useSlot('PermissionGuard');
 
   const handleTry = () => {
-    if (detail == null) return;
+    if (!canUse || detail == null) return;
     shell.selectLibraryAgent({
       isMutable: false,
       agentId: detail.agentId,
@@ -25,12 +32,13 @@ export function AgentDetailsHeader({ agentId, detail, onBack }: AgentDetailsHead
   };
 
   const handleEdit = () => {
-    if (detail == null) return;
+    if (!canManage || detail == null) return;
     shell.selectLibraryAgent({
       isMutable: true,
       isCreateAgent: true,
       agentId: detail.agentId,
       agentName: detail.name,
+      ...(detail.description === undefined ? {} : { description: detail.description }),
       agentSpec: detail.agentSpec,
     });
   };
@@ -60,21 +68,27 @@ export function AgentDetailsHeader({ agentId, detail, onBack }: AgentDetailsHead
       }
       end={
         <>
-          <Button.Primary
-            type="button"
-            aria-label="Try agent"
-            size="large"
-            disabled={detail == null}
-            onClick={handleTry}
-          >
-            <Icon name="play" className="size-3.5" />
-            Try
-          </Button.Primary>
+          <PermissionGuard allowed={canUse}>
+            <Button.Primary
+              type="button"
+              aria-label="Try agent"
+              size="large"
+              disabled={detail == null}
+              onClick={handleTry}
+            >
+              <Icon name="play" className="size-3.5" />
+              Try
+            </Button.Primary>
+          </PermissionGuard>
           {detail != null ? (
             <AgentOverflowMenu
               agentName={detail.name}
+              {...(detail.description === undefined ? {} : { description: detail.description })}
               agentSpec={detail.agentSpec}
               canMutate={canMutate}
+              canUse={canUse}
+              canManage={canManage}
+              canDelete={canDelete}
               canManageSchedules={false}
               onEdit={handleEdit}
               onDeleted={onBack}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useThreadIsRunning } from '@assistant-ui/core/react';
-import { useTrueFoundryToolResponses } from '@truefoundry/assistant-ui-runtime';
+import { useTrueForgeToolResponses } from '@truefoundry/trueforge-assistant-ui-runtime';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ASK_USER_CUSTOM_OPTION,
@@ -13,9 +13,9 @@ import { useSlot } from '../theme/SlotsProvider.js';
 
 const EMPTY_ANSWER: AskUserAnswerDraft = { radioValue: '', custom: '' };
 
-export function AskUserContainer() {
+export function AskUserContainer({ disabled = false }: { disabled?: boolean }) {
   const AskUserPrompt = useSlot('AskUserPrompt');
-  const { pending, respond } = useTrueFoundryToolResponses();
+  const { pending, respond } = useTrueForgeToolResponses();
   const isRunning = useThreadIsRunning();
   const item = pending[0];
 
@@ -56,7 +56,7 @@ export function AskUserContainer() {
   );
   const selectedResponse =
     currentAnswer.radioValue === ASK_USER_CUSTOM_OPTION ? currentAnswer.custom.trim() : currentAnswer.radioValue.trim();
-  const isSubmitDisabled = isRunning || currentQuestion == null || selectedResponse.length === 0;
+  const isSubmitDisabled = isRunning || disabled || currentQuestion == null || selectedResponse.length === 0;
   const isSubmitAllDisabled = isSubmitDisabled || !allQuestionsAnswered;
 
   const onCurrentAnswerChange = useCallback((questionId: string, update: Partial<AskUserAnswerDraft>) => {
@@ -70,18 +70,18 @@ export function AskUserContainer() {
   }, []);
 
   const onSubmit = useCallback(() => {
-    if (item == null || !allQuestionsAnswered) return;
+    if (disabled || item == null || !allQuestionsAnswered) return;
     const content = getResponseForQuestion(item.toolCallId);
     if (!content) return;
     respond({ toolCallId: item.toolCallId, content });
-  }, [allQuestionsAnswered, getResponseForQuestion, item, respond]);
+  }, [allQuestionsAnswered, disabled, getResponseForQuestion, item, respond]);
 
   if (item == null || currentQuestion == null) return null;
 
   return (
     <AskUserPrompt
       questions={questions}
-      readOnly={isRunning}
+      readOnly={isRunning || disabled}
       currentQuestion={currentQuestion}
       currentQuestionIndex={safeIndex}
       currentAnswer={currentAnswer}

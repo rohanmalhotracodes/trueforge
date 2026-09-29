@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 
+import { useToasterOptional } from '../../containers/ToasterContainer.js';
+import { useResourcePermissions } from '../../hooks/useResourcePermissions.js';
 import { useSessionShareSearch } from '../../hooks/useSessionShareSearch.js';
 import { Icon } from '../../icons/Icon.js';
 import { buildSessionResumeHref } from '../../routing/paths.js';
@@ -12,12 +14,17 @@ import { useOptionalShellMode } from '../../server/ShellModeContext.js';
 import type { Session, SessionEventItem, SessionListEntry } from '../../server/types.js';
 import { useSlot } from '../../theme/SlotsProvider.js';
 import { drainListPages } from '../../utils/drainListPages.js';
+import { reportSessionAccessError } from '../../utils/sessionAccessError.js';
 import { sessionTimeRangeFromCreatedAt } from '../../utils/sessionShareUrl.js';
 import { EmptyScreen } from '../EmptyScreen.js';
 import { cn } from '../lib/cn.js';
 import { sessionIsCreateAgent } from '../lib/sessionCreateAgent.js';
+import { Button } from '../primitives/Button.js';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../primitives/Dialog.js';
 import { Skeleton } from '../primitives/Skeleton.js';
 import type { AgentSessionsProps } from './types.js';
+
+const LOAD_MORE_ROOT_MARGIN = '96px';
 
 function sessionTitle(entry: Pick<SessionListEntry, 'title'>): string {
   const title = entry.title?.trim();
@@ -35,12 +42,23 @@ function entrySourceType(entry: SessionListEntry): 'schedule' | undefined {
   return 'sourceType' in entry && Reflect.get(entry, 'sourceType') === 'schedule' ? 'schedule' : undefined;
 }
 
-export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView }: AgentSessionsProps) {
+export function AgentSessions({
+  agentId,
+  startTimestamp,
+  endTimestamp,
+  shareView,
+  detailOnly = false,
+  detailSessionId,
+  onCloseDetail,
+  onLoadRecentSessions,
+}: AgentSessionsProps) {
   const sessionsServer = useAgentSessionsServer();
   const chatServer = useServer();
+  const toaster = useToasterOptional();
   const shell = useOptionalShellMode();
   const routes = useOptionalResolvedRoutes();
-  const { sessionId: selectedSessionId, updateShareSearch } = useSessionShareSearch();
+  const { sessionId: querySessionId, updateShareSearch } = useSessionShareSearch();
+  const selectedSessionId = detailOnly ? (detailSessionId ?? null) : querySessionId;
 
   const AgentSessionListRow = useSlot('AgentSessionListRow');
   const AgentSessionDetailHeader = useSlot('AgentSessionDetailHeader');
@@ -50,12 +68,29 @@ export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView
   const [nextPageToken, setNextPageToken] = useState<string | undefined>();
   const [listLoading, setListLoading] = useState(true);
   const [listLoadingMore, setListLoadingMore] = useState(false);
+  const [listLoadMoreFailed, setListLoadMoreFailed] = useState(false);
   const [listFailed, setListFailed] = useState(false);
   const listRequestIdRef = useRef(0);
+  const loadMoreInflightRef = useRef(false);
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
+  const [sentinelEl, setSentinelEl] = useState<HTMLDivElement | null>(null);
   const [detailEvents, setDetailEvents] = useState<SessionEventItem[]>();
   const [detailSession, setDetailSession] = useState<Session>();
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailFailed, setDetailFailed] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<SessionListEntry | null>(null);
+
+  const canDeleteSession = typeof chatServer.deleteSession === 'function';
+  const permissionResourceIds = useMemo(() => {
+    const ids = new Set(entries.map(entry => entry.id));
+    if (selectedSessionId != null && selectedSessionId.length > 0) ids.add(selectedSessionId);
+    return [...ids];
+  }, [entries, selectedSessionId]);
+  const { allows } = useResourcePermissions({
+    resourceType: 'session',
+    resourceIds: permissionResourceIds,
+  });
+  const canResume = allows(selectedSessionId, 'MANAGE');
 
   const listRequest = useMemo(
     () => ({
@@ -71,8 +106,21 @@ export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView
   useEffect(() => {
     const requestId = ++listRequestIdRef.current;
     let cancelled = false;
+    loadMoreInflightRef.current = false;
+    setNextPageToken(undefined);
+    if (detailOnly) {
+      setEntries([]);
+      setListLoading(false);
+      setListLoadingMore(false);
+      setListLoadMoreFailed(false);
+      setListFailed(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     setListLoading(true);
     setListLoadingMore(false);
+    setListLoadMoreFailed(false);
     setListFailed(false);
     void sessionsServer
       .listSessions(listRequest)
@@ -94,23 +142,43 @@ export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView
     return () => {
       cancelled = true;
     };
-  }, [listRequest, sessionsServer]);
+  }, [detailOnly, listRequest, sessionsServer]);
 
   const loadMore = useCallback(async () => {
-    if (nextPageToken == null || listLoadingMore) return;
+    // A ref, not `listLoadingMore`: the observer can fire twice before a re-render.
+    if (listLoading || nextPageToken == null || loadMoreInflightRef.current) return;
     const requestId = listRequestIdRef.current;
+    loadMoreInflightRef.current = true;
     setListLoadingMore(true);
+    setListLoadMoreFailed(false);
     try {
       const page = await sessionsServer.listSessions({ ...listRequest, pageToken: nextPageToken });
       if (listRequestIdRef.current !== requestId) return;
       setEntries(current => [...current, ...page.data]);
       setNextPageToken(page.nextPageToken);
     } catch {
-      // Keep the current page and token visible so the user can retry.
+      if (listRequestIdRef.current === requestId) setListLoadMoreFailed(true);
     } finally {
-      if (listRequestIdRef.current === requestId) setListLoadingMore(false);
+      if (listRequestIdRef.current === requestId) {
+        loadMoreInflightRef.current = false;
+        setListLoadingMore(false);
+      }
     }
-  }, [listLoadingMore, listRequest, nextPageToken, sessionsServer]);
+  }, [listLoading, listRequest, nextPageToken, sessionsServer]);
+
+  // `entries.length` re-arms the observer: an already-intersecting sentinel emits no new entry.
+  useEffect(() => {
+    if (listLoading || nextPageToken == null || listEl == null || sentinelEl == null) return;
+
+    const observer = new IntersectionObserver(
+      observed => {
+        if (observed.some(entry => entry.isIntersecting)) void loadMore();
+      },
+      { root: listEl, rootMargin: LOAD_MORE_ROOT_MARGIN },
+    );
+    observer.observe(sentinelEl);
+    return () => observer.disconnect();
+  }, [entries.length, listEl, listLoading, loadMore, nextPageToken, sentinelEl]);
 
   useEffect(() => {
     if (selectedSessionId == null || selectedSessionId.length === 0) {
@@ -136,15 +204,24 @@ export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView
             ...(pageToken == null ? {} : { pageToken }),
           }),
       }),
-      chatServer.getSession({ sessionId: selectedSessionId }).catch(() => undefined),
+      chatServer.getSession({ sessionId: selectedSessionId }),
     ])
       .then(([itemsNewestFirst, session]) => {
         if (cancelled) return;
         setDetailEvents([...itemsNewestFirst].reverse());
         setDetailSession(session);
       })
-      .catch(() => {
-        if (!cancelled) setDetailFailed(true);
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        reportSessionAccessError({
+          error,
+          ...(toaster != null ? { showError: toaster.showError } : {}),
+        });
+        if (detailOnly) {
+          onCloseDetail?.();
+          return;
+        }
+        setDetailFailed(true);
       })
       .finally(() => {
         if (!cancelled) setDetailLoading(false);
@@ -153,7 +230,7 @@ export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView
     return () => {
       cancelled = true;
     };
-  }, [chatServer, selectedSessionId, sessionsServer]);
+  }, [chatServer, detailOnly, onCloseDetail, selectedSessionId, sessionsServer, toaster]);
 
   const selectSession = (entry: SessionListEntry) => {
     const pinned = shareView === 'sessions' ? sessionTimeRangeFromCreatedAt(entry.createdAt) : null;
@@ -167,7 +244,25 @@ export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView
 
   const clearSelectedSession = () => {
     if (selectedSessionId == null) return;
+    if (detailOnly) {
+      onCloseDetail?.();
+      return;
+    }
     updateShareSearch({ sessionId: null });
+  };
+
+  const handleDelete = async (entry: SessionListEntry) => {
+    if (!allows(entry.id, 'DELETE') || typeof chatServer.deleteSession !== 'function') return;
+    setPendingDelete(null);
+    try {
+      await chatServer.deleteSession({ sessionId: entry.id });
+      setEntries(current => current.filter(item => item.id !== entry.id));
+      if (selectedSessionId === entry.id) {
+        updateShareSearch({ sessionId: null });
+      }
+    } catch (caught) {
+      toaster?.showError(caught);
+    }
   };
 
   const selectedEntry = entries.find(entry => entry.id === selectedSessionId);
@@ -193,7 +288,7 @@ export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView
       : null;
 
   const handleResume = () => {
-    if (selectedSessionId == null || shell == null) return;
+    if (!canResume || selectedSessionId == null || shell == null) return;
     const agentName = detailSession?.agentName ?? selectedEntry?.agentName;
     shell.openHistorySession({
       sessionId: selectedSessionId,
@@ -206,13 +301,55 @@ export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView
   const resumeProps =
     resumeHref != null ? { resumeHref, resumeLabel } : shell != null ? { onResume: handleResume, resumeLabel } : {};
 
+  const detailPanel = (
+    <section className="flex h-full min-w-0 flex-col bg-primary-bg">
+      {selectedSessionId == null ? (
+        <div className="flex flex-1 items-center justify-center px-6 text-sm text-text-secondary">
+          Select a session to view details
+        </div>
+      ) : detailFailed ? (
+        <div className="flex flex-1 items-center justify-center px-6 text-sm text-text-secondary">
+          Session details could not be loaded.
+        </div>
+      ) : (
+        <>
+          <AgentSessionDetailHeader
+            title={selectedTitle}
+            sessionId={selectedSessionId}
+            onClose={clearSelectedSession}
+            canResume={canResume}
+            canShare={canResume}
+            {...resumeProps}
+          />
+          {detailLoading || detailEvents === undefined ? (
+            <div className="flex flex-1 flex-col p-4" role="status" aria-label="Loading session details">
+              <Skeleton className="min-h-64 flex-1 rounded-lg" />
+            </div>
+          ) : (
+            <AgentSessionTimelineContainer
+              sessionId={selectedSessionId}
+              events={detailEvents}
+              listMetrics={selectedEntry?.metrics}
+              {...(detailOnly ? { contentMaxWidth: '60rem' } : {})}
+            />
+          )}
+        </>
+      )}
+    </section>
+  );
+
+  if (detailOnly) {
+    return <div className="h-full min-h-0 w-full">{detailPanel}</div>;
+  }
+
   // Full empty only when nothing is selected — keep the detail pane for deep-linked sessionIds
   // (filters/time range can empty the list while share state still points at a session).
   if (
     !listLoading &&
     !listFailed &&
     entries.length === 0 &&
-    (selectedSessionId == null || selectedSessionId.length === 0)
+    (selectedSessionId == null || selectedSessionId.length === 0) &&
+    onLoadRecentSessions == null
   ) {
     return (
       <EmptyScreen
@@ -232,7 +369,14 @@ export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView
     >
       <Panel id="agent-sessions-list" defaultSize="35%" minSize="20%" maxSize="50%">
         <aside className="flex h-full min-h-0 w-full flex-col bg-sidebar-bg">
-          <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto">
+          {onLoadRecentSessions != null ? (
+            <div className="flex shrink-0 justify-center border-b border-border p-3">
+              <Button.Secondary type="button" size="small" onClick={onLoadRecentSessions}>
+                Load recent sessions
+              </Button.Secondary>
+            </div>
+          ) : null}
+          <div ref={setListEl} className="scrollbar-none min-h-0 flex-1 overflow-y-auto">
             {listLoading ? (
               <div className="space-y-2 p-3" role="status" aria-label="Loading sessions">
                 {['a', 'b', 'c'].map(key => (
@@ -252,23 +396,32 @@ export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView
                   metrics={entry.metrics}
                   active={entry.id === selectedSessionId}
                   onSelect={() => selectSession(entry)}
+                  {...(canDeleteSession
+                    ? {
+                        onRequestDelete: () => setPendingDelete(entry),
+                        canDelete: allows(entry.id, 'DELETE'),
+                      }
+                    : {})}
                 />
               ))
             )}
-          </div>
 
-          {nextPageToken != null && !listLoading ? (
-            <div className="shrink-0 border-t border-border p-3">
-              <button
-                type="button"
-                disabled={listLoadingMore}
-                onClick={() => void loadMore()}
-                className="h-8 w-full rounded-md border border-border text-xs font-medium text-text-primary hover:bg-ghost-button-hover disabled:opacity-60"
-              >
-                {listLoadingMore ? 'Loading…' : 'Load more'}
-              </button>
-            </div>
-          ) : null}
+            {nextPageToken != null && !listLoading && !listFailed ? (
+              <div ref={setSentinelEl} className="px-3 py-2">
+                {listLoadingMore ? (
+                  <Skeleton className="h-16 rounded-md" role="status" aria-label="Loading more sessions" />
+                ) : listLoadMoreFailed ? (
+                  <button
+                    type="button"
+                    className="h-8 w-full rounded-md border border-border text-xs font-medium text-text-primary hover:bg-ghost-button-hover"
+                    onClick={() => void loadMore()}
+                  >
+                    Retry loading sessions
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </aside>
       </Panel>
 
@@ -294,41 +447,40 @@ export function AgentSessions({ agentId, startTimestamp, endTimestamp, shareView
       </Separator>
 
       <Panel id="agent-session-detail" defaultSize="65%" minSize="30%">
-        <section className="flex h-full min-w-0 flex-col bg-primary-bg">
-          {selectedSessionId == null ? (
-            <div className="flex flex-1 items-center justify-center px-6 text-sm text-text-secondary">
-              Select a session to view details
-            </div>
-          ) : detailFailed ? (
-            <div className="flex flex-1 items-center justify-center px-6 text-sm text-text-secondary">
-              Session details could not be loaded.
-            </div>
-          ) : (
-            <>
-              <AgentSessionDetailHeader
-                title={selectedTitle}
-                sessionId={selectedSessionId}
-                agentId={agentId}
-                createdAt={detailSession?.createdAt ?? selectedEntry?.createdAt}
-                view={shareView}
-                onClose={clearSelectedSession}
-                {...resumeProps}
-              />
-              {detailLoading || detailEvents === undefined ? (
-                <div className="flex flex-1 flex-col p-4" role="status" aria-label="Loading session details">
-                  <Skeleton className="min-h-64 flex-1 rounded-lg" />
-                </div>
-              ) : (
-                <AgentSessionTimelineContainer
-                  sessionId={selectedSessionId}
-                  events={detailEvents}
-                  listMetrics={selectedEntry?.metrics}
-                />
-              )}
-            </>
-          )}
-        </section>
+        {detailPanel}
       </Panel>
+
+      {pendingDelete != null ? (
+        <Dialog
+          open
+          onOpenChange={open => {
+            if (!open) setPendingDelete(null);
+          }}
+          aria-label="Delete session"
+          className="max-w-md"
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete session</DialogTitle>
+              <p className="text-text-secondary text-sm">
+                “{sessionTitle(pendingDelete)}” will be permanently deleted. This cannot be undone.
+              </p>
+            </DialogHeader>
+          </DialogContent>
+          <DialogFooter>
+            <Button.Secondary type="button" onClick={() => setPendingDelete(null)}>
+              Cancel
+            </Button.Secondary>
+            <Button.Destructive
+              type="button"
+              disabled={!allows(pendingDelete.id, 'DELETE')}
+              onClick={() => void handleDelete(pendingDelete)}
+            >
+              Delete
+            </Button.Destructive>
+          </DialogFooter>
+        </Dialog>
+      ) : null}
     </Group>
   );
 }

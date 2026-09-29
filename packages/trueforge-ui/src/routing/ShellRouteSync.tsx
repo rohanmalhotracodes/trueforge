@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { sessionIsCreateAgent } from '../atoms/lib/sessionCreateAgent.js';
+import { findAgentByName } from '../atoms/lib/useSearchAgentsList.js';
+import { useToasterOptional } from '../containers/ToasterContainer.js';
 import {
   useOptionalAgentSessionsServer,
   useOptionalCatalogServer,
@@ -12,11 +14,26 @@ import {
   useServerCapabilities,
   useServerCapabilitiesSettled,
 } from '../server/ServerContext.js';
-import { useShellMode } from '../server/ShellModeContext.js';
+import { libraryAgentId, useShellMode } from '../server/ShellModeContext.js';
 import { toEffectiveRoutes } from '../server/serverChrome.js';
+import {
+  readHistoryAgentSearch,
+  updateHistoryAgentSearch,
+  type HistoryAgentSearch,
+} from '../utils/historyAgentSearch.js';
+import { reportSessionAccessError } from '../utils/sessionAccessError.js';
 import { deriveChatPlace, derivePlace } from './derivePlace.js';
 import { buildPath, matchLocation, placesEqual, sanitizeSearchForPlace } from './paths.js';
 import type { ResolvedRoutes, RoutePlace, ShellSnapshot } from './types.js';
+
+// Filter intent follows chat history across chat/session URLs, but must not leak into unrelated surfaces.
+function placeOwnsHistoryAgentSearch(place: RoutePlace): boolean {
+  return place.type === 'root' || place.type === 'agent' || place.type === 'session';
+}
+
+function isSessionsPlace(place: RoutePlace): boolean {
+  return place.type === 'sessionsBrowser' || place.type === 'sharedSession';
+}
 
 /**
  * Single bidirectional bridge between shell state and the URL. Mounted under
@@ -26,10 +43,12 @@ export function ShellRouteSync({
   routes,
   activeRemoteId,
   initialSettingsOpen,
+  onError,
 }: {
   routes: ResolvedRoutes;
   activeRemoteId: string | undefined;
   initialSettingsOpen: boolean;
+  onError?: (error: unknown) => void;
 }) {
   const shell = useShellMode();
   const server = useOptionalServer();
@@ -38,6 +57,7 @@ export function ShellRouteSync({
   const schedules = useOptionalScheduleServer();
   const capabilities = useServerCapabilities();
   const capabilitiesSettled = useServerCapabilitiesSettled();
+  const toaster = useToasterOptional();
   const navigate = useNavigate();
   const location = useLocation();
   // Same gates as sidebar chrome: missing optional ports unregister their paths.
@@ -51,6 +71,7 @@ export function ShellRouteSync({
   const routeGatesKey = [
     effectiveRoutes.settings,
     effectiveRoutes.sessionsBrowser,
+    effectiveRoutes.sharedSession,
     effectiveRoutes.libraryAgent,
     effectiveRoutes.schedules,
   ].join('\0');
@@ -59,6 +80,7 @@ export function ShellRouteSync({
     settingsOpen: shell.settingsOpen,
     libraryOpen: shell.libraryOpen,
     sessionsOpen: shell.sessionsOpen,
+    sharedSessionId: shell.sharedSessionId,
     libraryAgentId: shell.libraryAgentId,
     schedulesOpen: shell.schedulesOpen,
     pendingSessionId: shell.pendingSessionId,
@@ -74,9 +96,13 @@ export function ShellRouteSync({
   // URL->shell effect does not re-apply it. `prevPlaceRef` powers push/replace.
   const selfNavPathRef = useRef<string | null>(null);
   const prevPlaceRef = useRef<RoutePlace | null>(null);
+  const appliedUrlPlaceRef = useRef<RoutePlace | null>(null);
   const bootedRef = useRef(false);
+  const bootPlaceRef = useRef<RoutePlace | null>(null);
+  const bootHistoryAgentRef = useRef<HistoryAgentSearch | null>(null);
   // Latest session id the URL asked for, so slower lookups cannot bind over it.
   const requestedSessionRef = useRef<string | null>(null);
+  const requestedHistoryAgentRef = useRef<string | null>(null);
   // Boot owns the first URL; the ongoing effects skip their initial commit so
   // they do not fight boot with the stale first-render place.
   const shellSyncStartedRef = useRef(false);
@@ -86,7 +112,26 @@ export function ShellRouteSync({
    * A URL carries only the id, so ask the server whether it names a mutable
    * draft or an agent chat; guessing "mutable" opens an agent session as a
    * blank draft. `requestedSessionRef` drops replies a later place superseded.
+   * Access denied / missing session: toast, then New Chat (do not bind the id).
    */
+  const goToRoot = useCallback(() => {
+    shell.setSettingsOpen(false);
+    shell.setLibraryOpen(false);
+    shell.setSchedulesOpen(false);
+    switch (shell.agentConfigMode) {
+      case 'AgentLibrary':
+        shell.openLibraryHome();
+        return;
+      case 'AgentComposer':
+      case 'AgentLibraryWithComposer':
+        shell.openDraft();
+        return;
+      case 'SingleAgent':
+        shell.clearChat();
+        return;
+    }
+  }, [shell]);
+
   const openSession = useCallback(
     (sessionId: string) => {
       requestedSessionRef.current = sessionId;
@@ -105,13 +150,74 @@ export function ShellRouteSync({
             ...(session.agentName != null ? { agentName: session.agentName } : {}),
           });
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (requestedSessionRef.current !== sessionId) return;
-          // Unreachable session: bind by id alone rather than stranding the shell.
-          shell.openHistorySession({ sessionId });
+          requestedSessionRef.current = null;
+          // Drop boot's "wait until place matches URL" so shell→URL can leave /sessions/:id.
+          bootPlaceRef.current = null;
+          reportSessionAccessError({
+            error,
+            ...(onError != null ? { onError } : {}),
+            ...(toaster != null ? { showError: toaster.showError } : {}),
+          });
+          goToRoot();
+        });
+    },
+    [goToRoot, onError, server, shell, toaster],
+  );
+
+  const applyHistoryAgentSearch = useCallback(
+    (next: HistoryAgentSearch | null) => {
+      if (next == null) {
+        requestedHistoryAgentRef.current = null;
+        bootHistoryAgentRef.current = null;
+        shell.setHistoryAgentFilter(null);
+        return;
+      }
+
+      const requestKey = `${next.intent}\0${next.agentName}`;
+      const current = shell.historyAgentFilter;
+      if (current?.intent === next.intent && current.agentName === next.agentName && current.agentId != null) {
+        requestedHistoryAgentRef.current = null;
+        return;
+      }
+
+      requestedHistoryAgentRef.current = requestKey;
+      shell.setHistoryAgentFilter(next);
+      if (server == null) return;
+
+      void findAgentByName({ server, agentName: next.agentName })
+        .then(agent => {
+          if (requestedHistoryAgentRef.current !== requestKey) return;
+          if (agent == null) {
+            requestedHistoryAgentRef.current = null;
+            bootHistoryAgentRef.current = null;
+            shell.setHistoryAgentFilter(null);
+            return;
+          }
+          requestedHistoryAgentRef.current = null;
+          shell.setHistoryAgentFilter({
+            agentId: libraryAgentId(agent),
+            agentName: agent.name,
+            intent: next.intent,
+          });
+        })
+        .catch(() => {
+          if (requestedHistoryAgentRef.current !== requestKey) return;
+          requestedHistoryAgentRef.current = null;
+          bootHistoryAgentRef.current = null;
+          shell.setHistoryAgentFilter(null);
         });
     },
     [server, shell],
+  );
+
+  const openAgent = useCallback(
+    (agentName: string) => {
+      shell.selectLibraryAgent({ isMutable: false, agentName });
+      applyHistoryAgentSearch({ intent: 'try-agent', agentName });
+    },
+    [applyHistoryAgentSearch, shell],
   );
 
   const applyPlace = useCallback(
@@ -126,11 +232,17 @@ export function ShellRouteSync({
         case 'sessionsBrowser':
           shell.setSessionsOpen(true);
           return;
+        case 'sharedSession':
+          shell.openSharedSession(target.sessionId);
+          return;
         case 'libraryAgent':
           shell.openLibraryAgent(target.agentId);
           return;
         case 'schedules':
           shell.setSchedulesOpen(true);
+          return;
+        case 'buildAgent':
+          shell.openAgentBuilder();
           return;
         case 'session':
           shell.setLibraryOpen(false);
@@ -139,27 +251,14 @@ export function ShellRouteSync({
           return;
         case 'agent':
           shell.setLibraryOpen(false);
-          shell.selectLibraryAgent({ isMutable: false, agentName: target.agentName });
+          openAgent(target.agentName);
           return;
         case 'root':
-          shell.setSettingsOpen(false);
-          shell.setLibraryOpen(false);
-          shell.setSchedulesOpen(false);
-          switch (shell.agentConfigMode) {
-            case 'AgentLibrary':
-              shell.openLibraryHome();
-              return;
-            case 'AgentComposer':
-            case 'AgentLibraryWithComposer':
-              shell.openDraft();
-              return;
-            case 'SingleAgent':
-              shell.clearChat();
-              return;
-          }
+          goToRoot();
+          return;
       }
     },
-    [shell, activeRemoteId, openSession],
+    [shell, activeRemoteId, goToRoot, openAgent, openSession],
   );
 
   // Boot: URL wins, except an explicit `initialSettingsOpen` overlay. Boot is the
@@ -179,6 +278,14 @@ export function ShellRouteSync({
       search: location.search,
       routes: effectiveRoutes,
     }) ?? { type: 'root' };
+    const historyAgentSearch: HistoryAgentSearch | null =
+      urlPlace.type === 'agent'
+        ? { intent: 'try-agent', agentName: urlPlace.agentName }
+        : placeOwnsHistoryAgentSearch(urlPlace)
+          ? readHistoryAgentSearch(location.search)
+          : null;
+    bootHistoryAgentRef.current = historyAgentSearch;
+    appliedUrlPlaceRef.current = urlPlace;
     const settingsOnBoot = settingsChromeEnabled && (initialSettingsOpen || urlPlace.type === 'settings');
 
     if (urlPlace.type === 'settings') {
@@ -196,10 +303,19 @@ export function ShellRouteSync({
       if (!placesEqual(chatPlace, urlPlace)) applyPlace(urlPlace);
       if (settingsOnBoot) shell.setSettingsOpen(true);
     }
+    if (urlPlace.type !== 'agent' && historyAgentSearch != null) {
+      applyHistoryAgentSearch(historyAgentSearch);
+    } else if (!placeOwnsHistoryAgentSearch(urlPlace)) {
+      applyHistoryAgentSearch(null);
+    }
 
     const desiredPlace: RoutePlace = settingsOnBoot ? { type: 'settings' } : urlPlace;
+    bootPlaceRef.current = placesEqual(place, desiredPlace) ? null : desiredPlace;
     const desiredPath = buildPath(desiredPlace, effectiveRoutes);
-    const desiredSearch = sanitizeSearchForPlace(desiredPlace, location.search);
+    const desiredSearch = updateHistoryAgentSearch(
+      sanitizeSearchForPlace(desiredPlace, location.search),
+      historyAgentSearch,
+    );
     prevPlaceRef.current = desiredPlace;
     if (desiredPath != null && (desiredPath !== location.pathname || desiredSearch !== location.search)) {
       selfNavPathRef.current = desiredPath !== location.pathname ? desiredPath : null;
@@ -216,6 +332,11 @@ export function ShellRouteSync({
       shellSyncStartedRef.current = true;
       return;
     }
+    const bootPlace = bootPlaceRef.current;
+    if (bootPlace != null) {
+      if (!placesEqual(place, bootPlace)) return;
+      bootPlaceRef.current = null;
+    }
     const target = buildPath(place, effectiveRoutes);
     if (target == null) return; // place has no configured URL (e.g. settings disabled)
     const basename = effectiveRoutes.basename.endsWith('/')
@@ -223,7 +344,21 @@ export function ShellRouteSync({
       : effectiveRoutes.basename;
     const browserPathname = `${basename}${location.pathname}` || '/';
     const latestSearch = window.location.pathname === browserPathname ? window.location.search : location.search;
-    const targetSearch = sanitizeSearchForPlace(place, latestSearch);
+    const ownsHistoryAgentSearch = placeOwnsHistoryAgentSearch(place);
+    const historyAgentSearch = ownsHistoryAgentSearch
+      ? shell.historyAgentFilter == null
+        ? bootHistoryAgentRef.current
+        : {
+            intent: shell.historyAgentFilter.intent,
+            agentName: shell.historyAgentFilter.agentName,
+          }
+      : null;
+    if (!ownsHistoryAgentSearch && shell.historyAgentFilter != null) {
+      requestedHistoryAgentRef.current = null;
+      shell.setHistoryAgentFilter(null);
+    }
+    if (shell.historyAgentFilter != null) bootHistoryAgentRef.current = null;
+    const targetSearch = updateHistoryAgentSearch(sanitizeSearchForPlace(place, latestSearch), historyAgentSearch);
 
     const prev = prevPlaceRef.current;
     prevPlaceRef.current = place;
@@ -239,7 +374,7 @@ export function ShellRouteSync({
     navigate({ pathname: target, search: targetSearch, hash: location.hash }, { replace });
     // location.pathname intentionally excluded: only react to shell-derived place changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [placeKey, routeGatesKey]);
+  }, [placeKey, routeGatesKey, shell.historyAgentFilter?.agentName, shell.historyAgentFilter?.intent]);
 
   // URL -> shell: apply on genuine location changes (Back/Forward, manual edits).
   useEffect(() => {
@@ -250,6 +385,7 @@ export function ShellRouteSync({
     }
     if (selfNavPathRef.current === location.pathname) {
       selfNavPathRef.current = null;
+      appliedUrlPlaceRef.current = place;
       return;
     }
     const urlPlace = matchLocation({
@@ -264,25 +400,35 @@ export function ShellRouteSync({
       selfNavPathRef.current = rootPath;
       navigate({ pathname: rootPath, search: rootSearch, hash: location.hash }, { replace: true });
       applyPlace({ type: 'root' });
+      applyHistoryAgentSearch(readHistoryAgentSearch(rootSearch));
       return;
     }
-    if (urlPlace.type !== 'settings' && shell.settingsOpen) {
-      // Leaving settings via Back to a chat place.
-      shell.setSettingsOpen(false);
+    const previousUrlPlace = appliedUrlPlaceRef.current;
+    appliedUrlPlaceRef.current = urlPlace;
+    if (previousUrlPlace == null || !placesEqual(previousUrlPlace, urlPlace)) {
+      if (urlPlace.type !== 'settings' && shell.settingsOpen) {
+        // Leaving settings via Back to a chat place.
+        shell.setSettingsOpen(false);
+      }
+      if (urlPlace.type !== 'library' && urlPlace.type !== 'libraryAgent' && shell.libraryOpen) {
+        shell.setLibraryOpen(false);
+      }
+      if (!isSessionsPlace(urlPlace) && shell.sessionsOpen) {
+        shell.setSessionsOpen(false);
+      }
+      if (urlPlace.type !== 'schedules' && shell.schedulesOpen) {
+        // Leaving schedules via Back to a chat place.
+        shell.setSchedulesOpen(false);
+      }
+      applyPlace(urlPlace);
     }
-    if (urlPlace.type !== 'library' && urlPlace.type !== 'libraryAgent' && shell.libraryOpen) {
-      shell.setLibraryOpen(false);
+    if (urlPlace.type !== 'agent' && placeOwnsHistoryAgentSearch(urlPlace)) {
+      applyHistoryAgentSearch(readHistoryAgentSearch(location.search));
+    } else if (!placeOwnsHistoryAgentSearch(urlPlace)) {
+      applyHistoryAgentSearch(null);
     }
-    if (urlPlace.type !== 'sessionsBrowser' && shell.sessionsOpen) {
-      shell.setSessionsOpen(false);
-    }
-    if (urlPlace.type !== 'schedules' && shell.schedulesOpen) {
-      // Leaving schedules via Back to a chat place.
-      shell.setSchedulesOpen(false);
-    }
-    applyPlace(urlPlace);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   return null;
 }

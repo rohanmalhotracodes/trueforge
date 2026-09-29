@@ -2,11 +2,13 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
+import type { HistoryAgentIntent } from '../utils/historyAgentSearch.js';
 import { replaceSessionShareSearch } from '../utils/sessionShareUrl.js';
 import {
   readDraftSpecPreferences,
   selectDraftSpecPreferences,
   withCapabilitiesSandbox,
+  withCapabilitiesWebSearch,
   writeDraftSpecPreferences,
   type DraftPreferenceKind,
 } from './draftSpecPreferences.js';
@@ -49,6 +51,8 @@ export type ShellMode =
       agentId?: string;
       /** Display / welcome label (often same as agentId). */
       agentName?: string;
+      /** Published-agent description, kept outside the executable agent spec. */
+      description?: string;
       /** Seed for mutable (draft) runtime. */
       agentSpec?: AgentSpec;
       locked: boolean;
@@ -63,10 +67,17 @@ export type SelectLibraryAgentRequest = {
   isCreateAgent?: boolean;
   agentId?: string;
   agentName?: string;
+  description?: string;
   agentSpec?: AgentSpec;
 };
 
-export type SettingsSection = 'models' | 'connectors' | 'skills' | 'sandbox';
+export type SettingsSection = 'models' | 'connectors' | 'skills' | 'sandbox' | 'web-search';
+
+export type HistoryAgentFilter = {
+  agentId?: string;
+  agentName: string;
+  intent: HistoryAgentIntent;
+};
 
 type ShellModeContextValue = {
   mode: ShellMode;
@@ -91,6 +102,10 @@ type ShellModeContextValue = {
   /** All-user sessions browser (includes drafts). */
   sessionsOpen: boolean;
   setSessionsOpen: (open: boolean) => void;
+  /** Session shown in the detail-only sharing surface. */
+  sharedSessionId: string | null;
+  openSharedSession: (sessionId: string) => void;
+  closeSharedSession: () => void;
   openLibraryAgent: (agentId: string) => void;
   closeLibraryAgent: () => void;
   schedulesOpen: boolean;
@@ -104,7 +119,7 @@ type ShellModeContextValue = {
    * Attach identity + agentSpec to the *current* mutable chat without remounting.
    * Used after `saveAgent` so the same draft session continues as an editable agent.
    */
-  bindMutableAgent: (req: { agentId: string; agentName: string; agentSpec: AgentSpec }) => void;
+  bindMutableAgent: (req: { agentId: string; agentName: string; description?: string; agentSpec: AgentSpec }) => void;
   /** @deprecated Prefer `selectLibraryAgent({ isMutable: false, agentName })`. */
   selectAgent: (agentName: string) => void;
   /** Open a simple New Chat (mutable, no agent-builder chrome). */
@@ -133,8 +148,8 @@ type ShellModeContextValue = {
    * History list filter forwarded as `listSessions({ agentId })`.
    * `null` = All chats. Only meaningful when `isLibraryEnabled`.
    */
-  historyAgentFilter: string | null;
-  setHistoryAgentFilter: (agentId: string | null) => void;
+  historyAgentFilter: HistoryAgentFilter | null;
+  setHistoryAgentFilter: (filter: HistoryAgentFilter | null) => void;
   /** Effective `listSessionsAgentId` for the runtime (SingleAgent locks to name). */
   listSessionsAgentId: string | undefined;
   /** Session selected from history. */
@@ -232,9 +247,10 @@ export function ShellModeProvider({
   const [agentConfigOpenState, setAgentConfigOpenState] = useState(false);
   const [libraryOpenState, setLibraryOpenState] = useState(false);
   const [sessionsOpenState, setSessionsOpenState] = useState(false);
+  const [sharedSessionId, setSharedSessionId] = useState<string | null>(null);
   const [libraryAgentId, setLibraryAgentId] = useState<string | null>(null);
   const [schedulesOpenState, setSchedulesOpenState] = useState(false);
-  const [historyAgentFilter, setHistoryAgentFilter] = useState<string | null>(null);
+  const [historyAgentFilter, setHistoryAgentFilter] = useState<HistoryAgentFilter | null>(null);
   const [pendingSessionId, setPendingSessionId] = useState<string | undefined>(undefined);
   const [pendingSessionEpoch, setPendingSessionEpoch] = useState(0);
   const settingsEnabled = isSettingsChromeEnabled({ catalog, capabilities });
@@ -253,12 +269,33 @@ export function ShellModeProvider({
         setLibraryAgentId(null);
         setSchedulesOpenState(false);
       } else {
-        replaceSessionShareSearch({ view: null });
+        replaceSessionShareSearch({
+          view: null,
+          ...(sharedSessionId == null ? {} : { sessionId: null }),
+        });
       }
+      setSharedSessionId(null);
       setSessionsOpenState(sessionsEnabled && open);
+    },
+    [sessionsEnabled, sharedSessionId],
+  );
+  const openSharedSession = useCallback(
+    (sessionId: string) => {
+      if (!sessionsEnabled) return;
+      setSettingsOpenState(false);
+      setAgentConfigOpenState(false);
+      setLibraryOpenState(false);
+      setLibraryAgentId(null);
+      setSchedulesOpenState(false);
+      setSharedSessionId(sessionId);
+      setSessionsOpenState(true);
     },
     [sessionsEnabled],
   );
+  const closeSharedSession = useCallback(() => {
+    setSharedSessionId(null);
+    replaceSessionShareSearch({ sessionId: null, view: 'sessions' });
+  }, []);
   const setLibraryOpen = useCallback(
     (open: boolean) => {
       if (!isLibraryEnabled) return;
@@ -378,7 +415,7 @@ export function ShellModeProvider({
   const listSessionsAgentId = useMemo(() => {
     if (locked) return lockedAgentName;
     if (!isLibraryEnabled) return undefined;
-    return historyAgentFilter ?? undefined;
+    return historyAgentFilter?.agentId;
   }, [locked, lockedAgentName, isLibraryEnabled, historyAgentFilter]);
 
   const bumpEpoch = useCallback((isMutable: boolean) => {
@@ -404,6 +441,7 @@ export function ShellModeProvider({
           isCreateAgent,
           agentId: req.agentId,
           agentName: req.agentName,
+          description: req.description,
           agentSpec: req.agentSpec ?? (kind === 'agent' ? agentSeedRef.current : chatSeedRef.current),
           locked: false,
         });
@@ -429,13 +467,22 @@ export function ShellModeProvider({
         agentName,
         locked: false,
       });
+      if (req.agentId != null) {
+        setHistoryAgentFilter({
+          agentId: req.agentId,
+          agentName,
+          intent: 'try-agent',
+        });
+      } else {
+        setHistoryAgentFilter(null);
+      }
       bumpEpoch(false);
     },
     [isComposerEnabled, isLibraryEnabled, bumpEpoch, setSettingsOpen, setSessionsOpen, setSchedulesOpen],
   );
 
   const bindMutableAgent = useCallback(
-    (req: { agentId: string; agentName: string; agentSpec: AgentSpec }) => {
+    (req: { agentId: string; agentName: string; description?: string; agentSpec: AgentSpec }) => {
       if (!isComposerEnabled) return;
       setMode(prev => {
         if (prev.status !== 'active' || !prev.isMutable) return prev;
@@ -445,6 +492,7 @@ export function ShellModeProvider({
           isCreateAgent: true,
           agentId: req.agentId,
           agentName: req.agentName,
+          description: req.description,
           agentSpec: req.agentSpec,
           locked: false,
         };
@@ -463,28 +511,65 @@ export function ShellModeProvider({
   const openDraft = useCallback(() => {
     if (!isComposerEnabled) return;
     refreshCapabilities?.();
+    setHistoryAgentFilter(null);
     selectLibraryAgent({ isMutable: true, isCreateAgent: false, agentSpec: chatSeedRef.current });
   }, [isComposerEnabled, refreshCapabilities, selectLibraryAgent]);
 
+  const isActiveAgentBuilder =
+    effectiveMode.status === 'active' && effectiveMode.isMutable && effectiveMode.isCreateAgent;
+  const isBoundAgentBuilder = isActiveAgentBuilder && effectiveMode.agentId != null;
   const openAgentBuilder = useCallback(() => {
     if (!isComposerEnabled) return;
     refreshCapabilities?.();
+    // Preserve unsaved drafts, saved builders start fresh when revisited.
+    if (isActiveAgentBuilder && !isBoundAgentBuilder) {
+      setSettingsOpen(false);
+      setLibraryOpenState(false);
+      setLibraryAgentId(null);
+      setSessionsOpen(false);
+      setSchedulesOpen(false);
+      setAgentConfigOpenState(true);
+      return;
+    }
     selectLibraryAgent({ isMutable: true, isCreateAgent: true, agentSpec: agentSeedRef.current });
-  }, [isComposerEnabled, refreshCapabilities, selectLibraryAgent]);
+  }, [
+    isActiveAgentBuilder,
+    isBoundAgentBuilder,
+    isComposerEnabled,
+    refreshCapabilities,
+    selectLibraryAgent,
+    setSchedulesOpen,
+    setSessionsOpen,
+    setSettingsOpen,
+  ]);
 
   const sandboxEnabled = capabilities?.sandbox.enabled;
+  const webSearchEnabled = capabilities?.webSearch?.enabled;
   const rememberDraftSpec = useCallback(
     (agentSpec: AgentSpec, kind: DraftPreferenceKind = 'chat') => {
       const selected = selectDraftSpecPreferences(agentSpec, kind);
-      const preferences = kind === 'agent' ? withCapabilitiesSandbox(selected, sandboxEnabled) : selected;
+      const withSandbox = kind === 'agent' ? withCapabilitiesSandbox(selected, sandboxEnabled) : selected;
+      const preferences =
+        kind === 'agent'
+          ? withCapabilitiesWebSearch({
+              spec: withSandbox,
+              webSearchEnabled,
+              kind: 'agent',
+            })
+          : withSandbox;
       if (kind === 'chat') {
         chatSeedRef.current = preferences;
       } else {
-        agentSeedRef.current = preferences;
+        // Keep the active builder intact in memory; storage remains limited to reusable preferences.
+        agentSeedRef.current = withCapabilitiesWebSearch({
+          spec: withCapabilitiesSandbox(agentSpec, sandboxEnabled),
+          webSearchEnabled,
+          kind: 'agent',
+        });
       }
       writeDraftSpecPreferences(kind, preferences);
     },
-    [sandboxEnabled],
+    [sandboxEnabled, webSearchEnabled],
   );
 
   const openHistorySession = useCallback(
@@ -597,6 +682,9 @@ export function ShellModeProvider({
       setLibraryOpen,
       sessionsOpen,
       setSessionsOpen,
+      sharedSessionId,
+      openSharedSession,
+      closeSharedSession,
       openLibraryAgent,
       closeLibraryAgent,
       schedulesOpen,
@@ -635,6 +723,9 @@ export function ShellModeProvider({
       setLibraryOpen,
       sessionsOpen,
       setSessionsOpen,
+      sharedSessionId,
+      openSharedSession,
+      closeSharedSession,
       openLibraryAgent,
       closeLibraryAgent,
       schedulesOpen,

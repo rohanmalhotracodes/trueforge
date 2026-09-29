@@ -31,17 +31,29 @@ beforeEach(() => {
 
 function mockServer(partial: Partial<AgentUIServer> = {}): AgentUIServer {
   return createMockAgentUIServer({
-    searchAgents: async () => [
-      { name: 'From SDK', agentId: 'from-sdk' },
-      { name: 'Other', agentId: 'other' },
-    ],
+    searchAgents: async () => ({
+      data: [
+        { name: 'From SDK', agentId: 'from-sdk' },
+        { name: 'Other', agentId: 'other' },
+      ],
+    }),
     ...partial,
   });
 }
 
 function FilterProbe() {
   const shell = useShellMode();
-  return <span data-testid="filter-value">{shell.historyAgentFilter ?? 'all'}</span>;
+  const filter = shell.historyAgentFilter;
+  return (
+    <>
+      <span data-testid="filter-value">{filter == null ? 'all' : `${filter.agentName}:${filter.intent}`}</span>
+      <span data-testid="runtime-key">{shell.runtimeKey}</span>
+      <span data-testid="pending-session">{shell.pendingSessionId ?? 'none'}</span>
+      <button type="button" onClick={() => shell.openHistorySession({ sessionId: 'draft-session', isMutable: true })}>
+        Open draft session
+      </button>
+    </>
+  );
 }
 
 function wrap({
@@ -88,10 +100,12 @@ describe('AgentHistoryFilterButton', () => {
   });
 
   it('opens popover and sets history filter on agent click', async () => {
-    const searchAgents = vi.fn(async () => [
-      { name: 'From SDK', agentId: 'from-sdk' },
-      { name: 'Other', agentId: 'other' },
-    ]);
+    const searchAgents = vi.fn(async () => ({
+      data: [
+        { name: 'From SDK', agentId: 'from-sdk' },
+        { name: 'Other', agentId: 'other' },
+      ],
+    }));
     const server = mockServer({ searchAgents });
     render(<AgentHistoryFilterButton />, {
       wrapper: wrap({ agentConfig: { mode: 'AgentLibraryWithComposer' }, server }),
@@ -99,6 +113,9 @@ describe('AgentHistoryFilterButton', () => {
 
     expect(screen.getByTestId('filter-value')).toHaveTextContent('all');
     expect(screen.queryByTestId('history-filter-active-dot')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open draft session' }));
+    const runtimeKeyBeforeFilter = screen.getByTestId('runtime-key').textContent;
+    expect(screen.getByTestId('pending-session')).toHaveTextContent('draft-session');
 
     fireEvent.click(screen.getByRole('button', { name: /Filter chat history/i }));
     await waitFor(() => expect(screen.getByRole('menuitem', { name: /From SDK/i })).toBeInTheDocument());
@@ -111,9 +128,17 @@ describe('AgentHistoryFilterButton', () => {
       fireEvent.click(screen.getByRole('menuitem', { name: /From SDK/i }));
     });
 
-    expect(screen.getByTestId('filter-value')).toHaveTextContent('from-sdk');
+    expect(screen.getByTestId('filter-value')).toHaveTextContent('From SDK:history');
+    expect(screen.getByTestId('pending-session')).toHaveTextContent('none');
+    expect(screen.getByTestId('runtime-key').textContent).not.toBe(runtimeKeyBeforeFilter);
     expect(screen.getByTestId('history-filter-active-dot')).toBeInTheDocument();
     expect(searchAgents).toHaveBeenCalled();
+
+    const runtimeKeyBeforeClear = screen.getByTestId('runtime-key').textContent;
+    fireEvent.click(screen.getByRole('button', { name: /Filter chat history/i }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'All chats' }));
+    expect(screen.getByTestId('filter-value')).toHaveTextContent('all');
+    expect(screen.getByTestId('runtime-key').textContent).not.toBe(runtimeKeyBeforeClear);
   });
 
   it('hides All chats while a search query is active', async () => {
@@ -123,7 +148,8 @@ describe('AgentHistoryFilterButton', () => {
         { name: 'From SDK', agentId: 'from-sdk' },
         { name: 'Other', agentId: 'other' },
       ];
-      return q === '' ? all : all.filter(a => a.name.toLowerCase().includes(q));
+      const data = q === '' ? all : all.filter(a => a.name.toLowerCase().includes(q));
+      return { data };
     });
     const server = mockServer({ searchAgents });
     render(<AgentHistoryFilterButton />, {
@@ -144,8 +170,8 @@ describe('AgentHistoryFilterButton', () => {
   it('shows an empty banner and keeps list min-height when search matches nothing', async () => {
     const searchAgents = vi.fn(async (req?: { query?: string }) => {
       const q = req?.query?.trim().toLowerCase() ?? '';
-      if (q === '') return [{ name: 'From SDK', agentId: 'from-sdk' }];
-      return [];
+      if (q === '') return { data: [{ name: 'From SDK', agentId: 'from-sdk' }] };
+      return { data: [] };
     });
     const server = mockServer({ searchAgents });
     render(<AgentHistoryFilterButton />, {

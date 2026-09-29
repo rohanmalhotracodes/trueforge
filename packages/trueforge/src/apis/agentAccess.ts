@@ -3,6 +3,7 @@
  * and schedule handlers. Lives in the API layer because stores must stay free
  * of request identity.
  */
+import type { TokenPagination } from '@truefoundry/trueforge-core/agent-session';
 import type { AgentAction, Authorizer } from '../auth/authorizer';
 import type { RequestContext } from '../auth/identity';
 import type { AgentRecord, IAgentStore } from '../db/agentStore';
@@ -31,14 +32,25 @@ export async function listAccessibleAgents<TTransaction>(input: {
   context: RequestContext;
   authorizer: Authorizer;
   action: AgentAction;
-}): Promise<AgentRecord[]> {
+  agent_name: string | undefined;
+  limit: number | undefined;
+  page_token: string | undefined;
+}): Promise<{ data: AgentRecord[]; pagination: TokenPagination }> {
   const access = await input.authorizer.listAgentAccess({ context: input.context, action: input.action });
   if (access.kind === 'all') {
-    return input.store.listAgents({ tenant_id: input.context.tenant_id });
+    return input.store.listAgents({
+      tenant_id: input.context.tenant_id,
+      agent_name: input.agent_name,
+      limit: input.limit,
+      page_token: input.page_token,
+    });
   }
   return input.store.listAgents({
     tenant_id: input.context.tenant_id,
     external_ids: access.agent_external_ids,
+    agent_name: input.agent_name,
+    limit: input.limit,
+    page_token: input.page_token,
   });
 }
 
@@ -56,11 +68,14 @@ export async function resolveManagedAgentIds<TTransaction>(input: {
   if (access.kind === 'all') {
     return [];
   }
-  const agents = await store.listAgents({
+  const { data } = await store.listAgents({
     tenant_id: context.tenant_id,
     external_ids: access.agent_external_ids,
+    agent_name: undefined,
+    limit: undefined,
+    page_token: undefined,
   });
-  return agents.map(agent => agent.id);
+  return data.map(agent => agent.id);
 }
 
 /** Related rows are readable by their creator or a manager of the bound named agent. */
@@ -80,4 +95,23 @@ export async function canReadAgentBoundResource<TTransaction>(input: {
   }
   const managedAgentIds = await resolveManagedAgentIds({ store, context, authorizer });
   return managedAgentIds.includes(agent_id);
+}
+
+/**
+ * Session conversation reads (get session, list events/turns). Shared sessions
+ * are readable by any tenant member; otherwise same as {@link canReadAgentBoundResource}.
+ * Mutating ops, subscribe, and sandbox downloads stay creator-only on purpose.
+ */
+export async function canReadSession<TTransaction>(input: {
+  shared: boolean;
+  store: IAgentStore<TTransaction>;
+  context: RequestContext;
+  authorizer: Authorizer;
+  created_by_subject_id: string;
+  agent_id: string | undefined;
+}): Promise<boolean> {
+  if (input.shared) {
+    return true;
+  }
+  return canReadAgentBoundResource(input);
 }

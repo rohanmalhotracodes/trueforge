@@ -1,10 +1,14 @@
 'use client';
 
-import { createTrueFoundryAgentUIServer } from '@truefoundry/assistant-ui-runtime/plugins/truefoundry-agent-server-adapter';
 import { useEffect, useState } from 'react';
 
 import type { TrueForgeBuiltInServerConfig, TrueForgeServerConfig } from '../server/TrueForgeServerConfig.js';
-import type { AgentBuilderCapabilitiesResponse, AgentUIServer, CatalogServer } from '../server/types.js';
+import type {
+  AgentBuilderCapabilitiesResponse,
+  AgentUIServer,
+  CatalogServer,
+  PermissionsServer,
+} from '../server/types.js';
 
 export type ResolvedServerState =
   | { status: 'loading'; server: null; error: null }
@@ -17,16 +21,12 @@ const DEFAULT_CAPABILITIES = {
     sandbox: { enabled: true },
     skill: { enabled: true },
     settings: { enabled: true },
+    webSearch: { enabled: false },
   },
 } satisfies AgentBuilderCapabilitiesResponse;
 
 function isBuiltInConfig(config: TrueForgeServerConfig): config is TrueForgeBuiltInServerConfig {
-  return (
-    typeof config === 'object' &&
-    config !== null &&
-    'type' in config &&
-    (config.type === 'truefoundry' || config.type === 'trueforge')
-  );
+  return typeof config === 'object' && config !== null && 'type' in config && config.type === 'trueforge';
 }
 
 function hasGetCapabilities(
@@ -36,18 +36,26 @@ function hasGetCapabilities(
 }
 
 /**
- * Attach optional catalog and ensure `getCapabilities` exists on the composed port.
+ * Attach optional host ports and ensure `getCapabilities` exists on the composed port.
  */
-function toAgentUIServer(server: object, catalog: CatalogServer | undefined): AgentUIServer {
+function toAgentUIServer(
+  server: object,
+  catalog: CatalogServer | undefined,
+  permissions: PermissionsServer | undefined,
+): AgentUIServer {
   const getCapabilities = hasGetCapabilities(server)
     ? () => server.getCapabilities()
     : async () => DEFAULT_CAPABILITIES;
   const withCapabilities = { ...server, getCapabilities };
-  const withCatalog = catalog != null ? { ...withCapabilities, catalog } : withCapabilities;
-  if (!isAgentUIServer(withCatalog)) {
+  const withOptionalPorts = {
+    ...withCapabilities,
+    ...(catalog == null ? {} : { catalog }),
+    ...(permissions == null ? {} : { permissions }),
+  };
+  if (!isAgentUIServer(withOptionalPorts)) {
     throw new Error('TrueForgeUI: runtime adapter returned an incomplete AgentUIServer');
   }
-  return withCatalog;
+  return withOptionalPorts;
 }
 
 function isAgentUIServer(value: object): value is AgentUIServer {
@@ -73,7 +81,6 @@ function isAgentUIServer(value: object): value is AgentUIServer {
 /**
  * Resolves a {@link TrueForgeServerConfig} to an {@link AgentUIServer}.
  * - `AgentUIServer` — sync passthrough
- * - `truefoundry` — async via `createTrueFoundryAgentUIServer`
  * - `trueforge` — via dynamic import of the Harness plugin adapter
  */
 export function useResolvedServer(
@@ -82,14 +89,11 @@ export function useResolvedServer(
 ): ResolvedServerState {
   const builtIn = isBuiltInConfig(config) ? config : null;
   const directServer: AgentUIServer | null = isBuiltInConfig(config) ? null : config;
-  const type = builtIn?.type;
-  const apiKey = builtIn?.type === 'truefoundry' ? builtIn.apiKey : '';
-  const controlPlaneURL = builtIn?.type === 'truefoundry' ? builtIn.controlPlaneURL : '';
-  const gatewayPlaneURL = builtIn?.type === 'truefoundry' ? (builtIn.gatewayPlaneURL ?? '') : '';
-  const trueforgeBaseUrl = builtIn?.type === 'trueforge' ? (builtIn.baseUrl ?? '') : '';
-  const trueforgeToken = builtIn?.type === 'trueforge' ? (builtIn.token ?? '') : '';
-  const trueforgeFetch = builtIn?.type === 'trueforge' ? builtIn.fetch : undefined;
+  const trueforgeBaseUrl = builtIn?.baseUrl ?? '';
+  const trueforgeToken = builtIn?.token ?? '';
+  const trueforgeFetch = builtIn?.fetch;
   const catalog = builtIn?.catalog;
+  const permissions = builtIn?.permissions;
 
   const [state, setState] = useState<ResolvedServerState>(() => {
     if (directServer) {
@@ -108,33 +112,23 @@ export function useResolvedServer(
     setState({ status: 'loading', server: null, error: null });
 
     const resolve = async (): Promise<AgentUIServer> => {
-      if (type === 'trueforge') {
-        const { createTrueForgeAgentUIServer } = await import('../plugins/trueforge-agent-server-adapter/index.js');
-        return createTrueForgeAgentUIServer({
-          ...(trueforgeBaseUrl ? { baseUrl: trueforgeBaseUrl } : {}),
-          ...(trueforgeToken ? { token: trueforgeToken } : {}),
-          ...(trueforgeFetch !== undefined ? { fetch: trueforgeFetch } : {}),
-          ...(catalog != null ? { catalog } : {}),
-        });
-      }
-
-      const runtimeServer = await createTrueFoundryAgentUIServer({
-        apiKey,
-        cpURL: controlPlaneURL,
-        ...(gatewayPlaneURL ? { gatewayURL: gatewayPlaneURL } : {}),
+      const { createTrueForgeAgentUIServer } = await import('../plugins/trueforge-agent-server-adapter/index.js');
+      return createTrueForgeAgentUIServer({
+        ...(trueforgeBaseUrl ? { baseUrl: trueforgeBaseUrl } : {}),
+        ...(trueforgeToken ? { token: trueforgeToken } : {}),
+        ...(trueforgeFetch !== undefined ? { fetch: trueforgeFetch } : {}),
+        ...(catalog != null ? { catalog } : {}),
+        ...(permissions != null ? { permissions } : {}),
       });
-      // TrueFoundry adapter may omit catalog; attach host-supplied catalog here.
-      return toAgentUIServer(runtimeServer, catalog);
     };
 
     void resolve()
       .then(server => {
         if (cancelled) return;
         try {
-          // trueforge factory already includes catalog; still normalize capabilities.
           setState({
             status: 'ready',
-            server: type === 'trueforge' ? toAgentUIServer(server, undefined) : server,
+            server: toAgentUIServer(server, undefined, undefined),
             error: null,
           });
         } catch (error: unknown) {
@@ -151,18 +145,7 @@ export function useResolvedServer(
     return () => {
       cancelled = true;
     };
-  }, [
-    type,
-    directServer,
-    apiKey,
-    controlPlaneURL,
-    gatewayPlaneURL,
-    trueforgeBaseUrl,
-    trueforgeToken,
-    trueforgeFetch,
-    catalog,
-    onError,
-  ]);
+  }, [directServer, trueforgeBaseUrl, trueforgeToken, trueforgeFetch, catalog, permissions, onError]);
 
   return state;
 }

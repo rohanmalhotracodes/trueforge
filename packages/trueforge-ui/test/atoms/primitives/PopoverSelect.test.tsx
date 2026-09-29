@@ -70,7 +70,8 @@ describe('PopoverSelect', () => {
     expect(trigger.querySelector('.border-r')).not.toBeNull();
   });
 
-  it('opens the menu above the trigger when menuPlacement is top', () => {
+  it('opens the menu above the trigger when menuPlacement is top and there is room', () => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
     render(
       <PopoverSelect
         aria-label="Timezone"
@@ -81,8 +82,100 @@ describe('PopoverSelect', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Timezone' }));
+    const trigger = screen.getByRole('button', { name: 'Timezone' });
+    trigger.getBoundingClientRect = () => new DOMRect(12, 400, 120, 32);
 
-    expect(screen.getByRole('listbox').parentElement).toHaveClass('bottom-full', 'mb-1');
+    fireEvent.click(trigger);
+
+    const menu = screen.getByRole('listbox').parentElement;
+    expect(menu).toHaveClass('fixed');
+    expect(menu).toHaveStyle({ transform: 'translateY(-100%)' });
+  });
+
+  it('flips the menu above the trigger when there is no room below', () => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 200 });
+    render(
+      <PopoverSelect
+        aria-label="Rows per page"
+        options={[
+          { value: '10', label: '10' },
+          { value: '25', label: '25' },
+          { value: '50', label: '50' },
+        ]}
+        value="10"
+        onValueChange={() => undefined}
+      />,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Rows per page' });
+    // Trigger sits near the bottom edge of a short viewport.
+    trigger.getBoundingClientRect = () => new DOMRect(100, 170, 72, 32);
+
+    fireEvent.click(trigger);
+
+    expect(screen.getByRole('listbox').parentElement).toHaveStyle({ transform: 'translateY(-100%)' });
+  });
+
+  it('keeps the menu below the trigger when there is room', () => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+    render(
+      <PopoverSelect
+        aria-label="Rows per page"
+        options={[
+          { value: '10', label: '10' },
+          { value: '25', label: '25' },
+        ]}
+        value="10"
+        onValueChange={() => undefined}
+      />,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Rows per page' });
+    trigger.getBoundingClientRect = () => new DOMRect(100, 40, 72, 32);
+
+    fireEvent.click(trigger);
+
+    expect(screen.getByRole('listbox').parentElement).not.toHaveStyle({ transform: 'translateY(-100%)' });
+  });
+
+  it('portals the menu so overflow parents do not clip it', () => {
+    render(
+      <div style={{ overflow: 'hidden', height: 40 }}>
+        <PopoverSelect
+          aria-label="Rows per page"
+          options={[
+            { value: '10', label: '10' },
+            { value: '25', label: '25' },
+          ]}
+          value="25"
+          onValueChange={() => undefined}
+        />
+      </div>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rows per page' }));
+
+    const listbox = screen.getByRole('listbox');
+    expect(listbox.parentElement).toHaveClass('fixed');
+    expect(listbox.closest('[style*="overflow"]')).toBeNull();
+  });
+
+  it('keeps a portaled full-width menu matched to its trigger', () => {
+    render(
+      <PopoverSelect
+        aria-label="Timezone"
+        className="w-full"
+        menuClassName="w-full min-w-0"
+        options={[{ value: 'UTC', label: 'UTC' }]}
+        value="UTC"
+        onValueChange={() => undefined}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: 'Timezone' });
+    trigger.getBoundingClientRect = () => new DOMRect(12, 20, 240, 32);
+
+    fireEvent.click(trigger);
+
+    expect(screen.getByRole('listbox').parentElement).toHaveStyle({ width: '240px' });
   });
 });

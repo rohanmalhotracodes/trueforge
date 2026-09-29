@@ -2,10 +2,11 @@
  * DB-backed agent registry API (mounted at /api/v1/agents).
  */
 import { OpenAPIHono, type RouteHandler } from '@hono/zod-openapi';
-import type { AgentSpec } from '@truefoundry/trueforge-core/agent-session';
+import { InvalidPageTokenError, type AgentSpec } from '@truefoundry/trueforge-core/agent-session';
 import type { Context } from 'hono';
 import type { Authorizer } from '../auth/authorizer';
 import { createdBySubjectFromRequestContext, type ResolveRequestContext } from '../auth/identity';
+import configuration from '../config';
 import {
   AgentExternalIdConflictError,
   AgentNameConflictError,
@@ -17,6 +18,7 @@ import type { IModelProviderStore } from '../db/modelProviderStore';
 import type { ISandboxProviderStore } from '../db/sandboxProviderStore';
 import type { ISkillStore } from '../db/skillStore';
 import type { WithTransaction } from '../db/transaction';
+import type { IWebSearchProviderStore } from '../db/webSearchProviderStore';
 import {
   createAgentRoute,
   deleteAgentRoute,
@@ -29,13 +31,15 @@ import { validateAgentSpec } from '../runtime/sessionResources';
 import { type Agent, type CreateAgentRequest } from '../schemas/agent';
 import { agentIfAccessible, listAccessibleAgents } from './agentAccess';
 import { buildAgentCodeSnippets } from './agentCodeSnippets';
+import type { ResolveSkillStore } from './skills';
 
 export interface AgentsRouterDeps<TTransaction> {
   resolveAgentStore: (c: Context) => IAgentStore<TTransaction>;
   resolveModelProviderStore: (c: Context) => IModelProviderStore<TTransaction>;
   resolveMcpServerStore: (c: Context) => IMcpServerStore<TTransaction>;
-  skillStore: ISkillStore<TTransaction>;
+  resolveSkillStore: ResolveSkillStore<TTransaction>;
   resolveSandboxProviderStore: (c: Context) => ISandboxProviderStore<TTransaction>;
+  resolveWebSearchProviderStore: (c: Context) => IWebSearchProviderStore<TTransaction>;
   withTransaction: WithTransaction<TTransaction>;
   resolveRequestContext: ResolveRequestContext;
   authorizer: Authorizer;
@@ -46,6 +50,7 @@ function toWireAgent(record: AgentRecord): Agent {
   return {
     id: record.id,
     name: record.name,
+    description: record.description,
     manifest: record.manifest,
     created_by_subject: record.created_by_subject,
   };
@@ -53,17 +58,19 @@ function toWireAgent(record: AgentRecord): Agent {
 
 async function validateManifest<TTransaction>({
   spec,
-  deps,
   modelProviderStore,
   mcpServerStore,
+  skillStore,
   sandboxProviderStore,
+  webSearchProviderStore,
   tenant_id,
 }: {
   spec: AgentSpec;
-  deps: AgentsRouterDeps<TTransaction>;
   modelProviderStore: IModelProviderStore<TTransaction>;
   mcpServerStore: IMcpServerStore<TTransaction>;
+  skillStore: ISkillStore<TTransaction>;
   sandboxProviderStore: ISandboxProviderStore<TTransaction>;
+  webSearchProviderStore: IWebSearchProviderStore<TTransaction>;
   tenant_id: string;
 }): Promise<AgentSpec> {
   await validateAgentSpec({
@@ -71,22 +78,34 @@ async function validateManifest<TTransaction>({
     tenant_id,
     modelProviderStore,
     mcpServerStore,
-    skillStore: deps.skillStore,
+    skillStore,
     sandboxProviderStore,
+    webSearchProviderStore,
   });
   return spec;
 }
 
 export function createAgentsRouter<TTransaction>(deps: AgentsRouterDeps<TTransaction>) {
   const listHandler: RouteHandler<typeof listAgentsRoute> = async c => {
+    const { limit, page_token: pageToken, agent_name: agentName } = c.req.valid('query');
     const requestContext = deps.resolveRequestContext(c);
-    const records = await listAccessibleAgents({
-      store: deps.resolveAgentStore(c),
-      context: requestContext,
-      authorizer: deps.authorizer,
-      action: 'read',
-    });
-    return c.json({ data: records.map(toWireAgent) }, 200);
+    try {
+      const { data, pagination } = await listAccessibleAgents({
+        store: deps.resolveAgentStore(c),
+        context: requestContext,
+        authorizer: deps.authorizer,
+        action: 'read',
+        agent_name: agentName,
+        limit,
+        page_token: pageToken,
+      });
+      return c.json({ data: data.map(toWireAgent), pagination }, 200);
+    } catch (error) {
+      if (error instanceof InvalidPageTokenError) {
+        return c.json({ error: { message: error.message } }, 400);
+      }
+      throw error;
+    }
   };
 
   const createHandler: RouteHandler<typeof createAgentRoute> = async c => {
@@ -94,16 +113,18 @@ export function createAgentsRouter<TTransaction>(deps: AgentsRouterDeps<TTransac
     const requestContext = deps.resolveRequestContext(c);
     const manifest = await validateManifest({
       spec: body.manifest,
-      deps,
       modelProviderStore: deps.resolveModelProviderStore(c),
       mcpServerStore: deps.resolveMcpServerStore(c),
+      skillStore: deps.resolveSkillStore(c),
       sandboxProviderStore: deps.resolveSandboxProviderStore(c),
+      webSearchProviderStore: deps.resolveWebSearchProviderStore(c),
       tenant_id: requestContext.tenant_id,
     });
     try {
       const record = await deps.resolveAgentStore(c).createAgent({
         tenant_id: requestContext.tenant_id,
         name: body.name,
+        description: body.description,
         manifest,
         external_id: null,
         created_by_subject: createdBySubjectFromRequestContext(requestContext),
@@ -144,11 +165,22 @@ export function createAgentsRouter<TTransaction>(deps: AgentsRouterDeps<TTransac
     if (record === undefined) {
       return c.json({ error: { message: `Agent not found: ${agentId}` } }, 404);
     }
+    // Prefer FE-supplied public URL (avoids in-cluster Host). Else request origin + PUBLIC_BASE_URL path.
+    // e.g. origin https://sample.com + PUBLIC_BASE_URL https://example.com/trueforge
+    //   → https://sample.com/trueforge
+    const requestedBaseUrl = c.req.valid('query').base_url;
+    const origin = new URL(c.req.url).origin;
+    let baseUrl = origin;
+    if (requestedBaseUrl) {
+      baseUrl = requestedBaseUrl;
+    } else if (configuration.PUBLIC_BASE_URL) {
+      baseUrl = new URL(new URL(configuration.PUBLIC_BASE_URL).pathname, origin).href;
+    }
     return c.json(
       {
         data: buildAgentCodeSnippets({
           agentName: record.name,
-          baseUrl: new URL(c.req.url).origin,
+          baseUrl,
         }),
       },
       200,
@@ -186,15 +218,17 @@ export function createAgentsRouter<TTransaction>(deps: AgentsRouterDeps<TTransac
     }
     const manifest = await validateManifest({
       spec: body.manifest,
-      deps,
       modelProviderStore: deps.resolveModelProviderStore(c),
       mcpServerStore: deps.resolveMcpServerStore(c),
+      skillStore: deps.resolveSkillStore(c),
       sandboxProviderStore: deps.resolveSandboxProviderStore(c),
+      webSearchProviderStore: deps.resolveWebSearchProviderStore(c),
       tenant_id: requestContext.tenant_id,
     });
     const record = await deps.resolveAgentStore(c).updateAgent({
       tenant_id: requestContext.tenant_id,
       id: agentId,
+      ...(body.description === undefined ? {} : { description: body.description }),
       manifest,
     });
     if (record === undefined) {

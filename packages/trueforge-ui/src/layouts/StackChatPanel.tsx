@@ -11,6 +11,7 @@ import { cn } from '../atoms/lib/cn.js';
 import { Spinner } from '../atoms/primitives/Spinner.js';
 import { AgentConfigDrawerContainer } from '../containers/AgentConfigDrawerContainer.js';
 import { Thread } from '../containers/Thread.js';
+import { useChatChromeActionsVisible } from '../hooks/useChatChromeActionsVisible.js';
 import { Icon } from '../icons/Icon.js';
 import { useOptionalShellMode } from '../server/ShellModeContext.js';
 import { useSlot } from '../theme/SlotsProvider.js';
@@ -37,13 +38,16 @@ export function StackChatPanel({ className, threadHeaderEnd }: StackChatPanelPro
   const AgentDetailsPage = useSlot('AgentDetailsPage');
   const AgentsLibrary = useSlot('AgentsLibrary');
   const SessionsPage = useSlot('SessionsPage');
+  const ShareChatButton = useSlot('ShareChatButton');
   const SaveAgentButton = useSlot('SaveAgentButton');
   const SelectAgentEmptyState = useSlot('SelectAgentEmptyState');
+  const UserAvatar = useSlot('UserAvatar');
   const isIdle = shell?.mode.status === 'idle';
   const settingsOpen = shell?.settingsOpen === true;
   const libraryOpen = shell?.libraryOpen === true;
   const sessionsOpen = shell?.sessionsOpen === true;
   const schedulesOpen = shell?.schedulesOpen === true;
+  const chatChromeActionsVisible = useChatChromeActionsVisible();
   const showNewActions = shell?.isNewChatEnabled !== false;
 
   useEffect(() => {
@@ -126,7 +130,7 @@ export function StackChatPanel({ className, threadHeaderEnd }: StackChatPanelPro
           <PageHeader
             start={
               <>
-                {showNewActions ? (
+                {showNewActions && !chatChromeActionsVisible ? (
                   <button
                     type="button"
                     aria-label="New Chat"
@@ -153,6 +157,7 @@ export function StackChatPanel({ className, threadHeaderEnd }: StackChatPanelPro
             title={<NamedAgentHeaderLabel />}
             end={
               <>
+                <ShareChatButton />
                 <ClearChatButton />
                 <SaveAgentButton />
                 {threadHeaderEnd}
@@ -164,21 +169,22 @@ export function StackChatPanel({ className, threadHeaderEnd }: StackChatPanelPro
       )}
       {/* Stable mount: only ShellActions needs to survive Settings / list / thread; host end chrome stays in the thread header. */}
       <footer className="flex shrink-0 items-center justify-between border-t border-border px-2 py-1.5">
-        {libraryOpen || schedulesOpen ? (
-          <button
-            type="button"
-            className={auiButtonClass({ variant: 'ghost', size: 'small' })}
-            onClick={() => {
-              shell?.setLibraryOpen(false);
-              shell?.setSchedulesOpen(false);
-            }}
-          >
-            <Icon name="arrow-left" />
-            Back to chat
-          </button>
-        ) : (
-          <span />
-        )}
+        <div className="flex min-w-0 items-center gap-1">
+          {libraryOpen || schedulesOpen ? (
+            <button
+              type="button"
+              className={auiButtonClass({ variant: 'ghost', size: 'small' })}
+              onClick={() => {
+                shell?.setLibraryOpen(false);
+                shell?.setSchedulesOpen(false);
+              }}
+            >
+              <Icon name="arrow-left" />
+              Back to chat
+            </button>
+          ) : null}
+          <UserAvatar />
+        </div>
         <ShellActions key="shell-actions" />
       </footer>
       {shell?.agentConfigOpen ? (
