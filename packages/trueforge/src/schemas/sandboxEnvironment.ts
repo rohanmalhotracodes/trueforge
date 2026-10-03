@@ -11,6 +11,11 @@ import { NameSchema } from './common';
 
 export const SANDBOX_ENVIRONMENT_DESCRIPTION_MAX_LENGTH = 1024;
 
+/** Reserved system environment name (tenant default; not creatable via public CRUD). */
+export const DEFAULT_SANDBOX_ENVIRONMENT_NAME = 'default';
+
+export const DEFAULT_SANDBOX_ENVIRONMENT_RESOURCES = { cpu: 1, memory: 1, disk: 3 } as const;
+
 const BUILD_SCRIPT_EXAMPLE = 'set -ex\npip install httpx\n';
 
 export const SandboxEnvironmentDescriptionSchema = z
@@ -25,8 +30,8 @@ export const SandboxEnvironmentLifecycleStageSchema = z
   .openapi('SandboxEnvironmentLifecycleStage');
 
 export const SandboxEnvironmentVersionStatusSchema = z
-  .enum(['pending', 'active', 'failed'])
-  .describe('Build/activation status of an environment version.')
+  .enum(['pending', 'ready', 'failed'])
+  .describe('Build readiness of the environment version.')
   .openapi('SandboxEnvironmentVersionStatus');
 
 /** Single image variant today; widen with discriminatedUnion when another type lands. */
@@ -53,11 +58,7 @@ export const SandboxEnvironmentResourcesSchema = z
 export const SandboxEnvironmentSecretSchema = z
   .object({
     env: z.string().min(1).describe('Environment variable name injected into the sandbox.'),
-    value: z
-      .string()
-      .min(1)
-      .optional()
-      .describe('Secret value or placeholder; resolved against the secrets store later.'),
+    value: z.string().min(1).describe('Secret value; GET responses use a redacted stand-in.'),
     hosts: z.array(z.string().min(1)).describe('Hosts this secret may be sent to.'),
   })
   .strict()
@@ -94,26 +95,39 @@ export const SandboxEnvironmentNetworkingSchema = z
   })
   .openapi('SandboxEnvironmentNetworking');
 
-/** Wire + request/response document — no `type` / `sandbox_provider`. */
-export const SandboxEnvironmentManifestSchema = z
+/**
+ * Manifest fields shared by wire and storage. Responses may use name `"default"`;
+ * create/update requests reject it (reserved system env).
+ */
+const SandboxEnvironmentManifestFieldsSchema = z
   .object({
     name: NameSchema,
     description: SandboxEnvironmentDescriptionSchema.optional(),
     image: SandboxEnvironmentImageSchema.optional(),
-    resources: SandboxEnvironmentResourcesSchema.default({ cpu: 1, memory: 1, disk: 3 }),
+    resources: SandboxEnvironmentResourcesSchema.default(DEFAULT_SANDBOX_ENVIRONMENT_RESOURCES),
     environment_variables: z.record(z.string().min(1), z.string()).optional(),
     networking: SandboxEnvironmentNetworkingSchema.optional(),
   })
-  .strict()
-  .openapi('SandboxEnvironmentManifest');
+  .strict();
+
+/** Wire document (list/get/response) — no `type` / `sandbox_provider`; name `"default"` allowed. */
+export const SandboxEnvironmentManifestSchema =
+  SandboxEnvironmentManifestFieldsSchema.openapi('SandboxEnvironmentManifest');
+
+/** PUT body manifest — rejects reserved name `"default"`. */
+const SandboxEnvironmentManifestRequestSchema = SandboxEnvironmentManifestFieldsSchema.refine(
+  manifest => manifest.name !== DEFAULT_SANDBOX_ENVIRONMENT_NAME,
+  { message: 'name "default" is reserved', path: ['name'] },
+).openapi('SandboxEnvironmentManifestRequest');
 
 /**
  * Persisted version jsonb — wire fields plus backend-resolved provider identity.
- * Not exposed on request/response wire types.
+ * `truefoundry` = TrueFoundry platform mode label; runtime still uses Daytona for envs.
+ * Not exposed on request/response wire types. Allows name `"default"`.
  */
 export const StoredSandboxEnvironmentManifestSchema = z
   .object({
-    ...SandboxEnvironmentManifestSchema.shape,
+    ...SandboxEnvironmentManifestFieldsSchema.shape,
     type: z.enum(['daytona', 'truefoundry']),
     sandbox_provider: z.enum(['daytona', 'truefoundry']),
   })
@@ -129,30 +143,17 @@ export const SandboxEnvironmentVersionSecretSchema = z
 /** Version jsonb column only — not on CRUD wire responses. */
 export const SandboxEnvironmentVersionInternalMetadataSchema = z
   .object({
-    secrets: z.array(SandboxEnvironmentVersionSecretSchema).describe('Resolved secret refs for this version.'),
+    secrets: z
+      .array(SandboxEnvironmentVersionSecretSchema)
+      .default([])
+      .describe('Resolved secret refs for this version.'),
   })
   .strict();
 
-export const SandboxEnvironmentVersionSummarySchema = z
-  .object({
-    version: z.number().int().positive().describe('Monotonic version number within the environment.'),
-    status: SandboxEnvironmentVersionStatusSchema,
-    status_reason: z.string().nullable().describe('Failure detail when status is failed; null otherwise.'),
-    external_ref: z.string().min(1).describe('Server-generated provider snapshot/build name.'),
-  })
-  .strict()
-  .openapi('SandboxEnvironmentVersionSummary');
-
-export const CreateSandboxEnvironmentRequestSchema = z
-  .object({
-    manifest: SandboxEnvironmentManifestSchema,
-  })
-  .strict()
-  .openapi('CreateSandboxEnvironmentRequest');
-
+/** PUT create-or-update body (single write API). */
 export const UpdateSandboxEnvironmentRequestSchema = z
   .object({
-    manifest: SandboxEnvironmentManifestSchema,
+    manifest: SandboxEnvironmentManifestRequestSchema,
   })
   .strict()
   .openapi('UpdateSandboxEnvironmentRequest');
@@ -164,10 +165,10 @@ export const SandboxEnvironmentSchema = z
     id: z.string().min(1).describe('Immutable server-generated environment identifier.'),
     name: NameSchema,
     description: z.string().describe('Human-readable description; empty when unset.'),
-    active_version: z.number().int().positive().describe('Version currently pointed at by the environment.'),
     lifecycle_stage: SandboxEnvironmentLifecycleStageSchema,
+    status: SandboxEnvironmentVersionStatusSchema.describe('Readiness of the environment.'),
+    status_reason: z.string().nullable().describe('Failure detail when status is failed; null otherwise.'),
     manifest: SandboxEnvironmentManifestSchema,
-    version: SandboxEnvironmentVersionSummarySchema,
     created_by_subject: CreatedBySubjectSchema,
     created_at: IsoTimestamp.describe('ISO-8601 create time.'),
     updated_at: IsoTimestamp.describe('ISO-8601 last update time.'),
@@ -193,7 +194,5 @@ export type SandboxEnvironmentVersionStatus = z.infer<typeof SandboxEnvironmentV
 export type SandboxEnvironmentManifest = z.infer<typeof SandboxEnvironmentManifestSchema>;
 export type StoredSandboxEnvironmentManifest = z.infer<typeof StoredSandboxEnvironmentManifestSchema>;
 export type SandboxEnvironmentVersionInternalMetadata = z.infer<typeof SandboxEnvironmentVersionInternalMetadataSchema>;
-export type SandboxEnvironmentVersionSummary = z.infer<typeof SandboxEnvironmentVersionSummarySchema>;
-export type CreateSandboxEnvironmentRequest = z.infer<typeof CreateSandboxEnvironmentRequestSchema>;
 export type UpdateSandboxEnvironmentRequest = z.infer<typeof UpdateSandboxEnvironmentRequestSchema>;
 export type SandboxEnvironment = z.infer<typeof SandboxEnvironmentSchema>;
